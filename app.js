@@ -8,12 +8,14 @@ const clearPlaylistBtn = document.getElementById('clearPlaylist');
 const fadeSlider = document.getElementById('fadeSlider');
 const fadeValue = document.getElementById('fadeValue');
 const installButton = document.getElementById('installButton');
+const loopToggle = document.getElementById('loopToggle');
 
 const state = {
   tracks: [],
   currentIndex: -1,
   isPlaying: false,
   fadeDuration: Number(fadeSlider?.value ?? 3),
+  autoLoop: Boolean(loopToggle?.checked),
 };
 
 const audioContext = new (window.AudioContext || window.webkitAudioContext)();
@@ -32,7 +34,48 @@ function createPlayer() {
   gain.gain.value = 0;
   source.connect(gain);
   gain.connect(audioContext.destination);
-  return { audio, gain, stopTimeout: null };
+  return { audio, gain, stopTimeout: null, advanceHandler: null };
+}
+
+function cancelAutoAdvance(player) {
+  if (player.advanceHandler) {
+    player.audio.removeEventListener('timeupdate', player.advanceHandler);
+    player.advanceHandler = null;
+  }
+}
+
+function scheduleAutoAdvance(player, index) {
+  cancelAutoAdvance(player);
+  const handler = () => {
+    if (state.currentIndex !== index || !state.isPlaying) {
+      cancelAutoAdvance(player);
+      return;
+    }
+    const { audio } = player;
+    if (!Number.isFinite(audio.duration) || audio.duration === Infinity) {
+      return;
+    }
+    if (audio.currentTime < 0.2) {
+      return;
+    }
+    const baseFade = Math.max(state.fadeDuration, CROSS_FADE_MIN);
+    const maxWindow = Math.max(audio.duration * 0.6, CROSS_FADE_MIN);
+    const fadeWindow = Math.min(baseFade, maxWindow);
+    const remaining = audio.duration - audio.currentTime;
+    if (remaining <= fadeWindow + 0.05) {
+      cancelAutoAdvance(player);
+      if (state.autoLoop && state.tracks[index]) {
+        playTrack(index, { fadeDurationOverride: fadeWindow }).catch(console.error);
+      } else {
+        const nextIndex = index + 1;
+        if (nextIndex < state.tracks.length) {
+          playTrack(nextIndex, { fadeDurationOverride: fadeWindow }).catch(console.error);
+        }
+      }
+    }
+  };
+  player.advanceHandler = handler;
+  player.audio.addEventListener('timeupdate', handler);
 }
 
 async function ensureContextRunning() {
@@ -61,6 +104,11 @@ clearPlaylistBtn?.addEventListener('click', () => {
 fadeSlider?.addEventListener('input', () => {
   state.fadeDuration = Number(fadeSlider.value);
   fadeValue.textContent = `${state.fadeDuration.toFixed(1).replace(/\.0$/, '')} s`;
+});
+
+loopToggle?.addEventListener('change', () => {
+  state.autoLoop = loopToggle.checked;
+  updateControls();
 });
 
 playlistEl?.addEventListener('click', event => {
@@ -143,11 +191,15 @@ togglePlayBtn?.addEventListener('click', () => {
   if (state.isPlaying) {
     currentPlayer.audio.pause();
     state.isPlaying = false;
+    cancelAutoAdvance(currentPlayer);
   } else {
     ensureContextRunning()
       .then(() => currentPlayer.audio.play())
       .then(() => {
         state.isPlaying = true;
+        if (state.currentIndex !== -1) {
+          scheduleAutoAdvance(currentPlayer, state.currentIndex);
+        }
       })
       .catch(console.error);
   }
@@ -267,7 +319,7 @@ async function playTrack(index, options = {}) {
   if (!track) {
     return;
   }
-  const { fade = true } = options;
+  const { fade = true, fadeDurationOverride } = options;
   await ensureContextRunning();
 
   const hasCurrent = state.currentIndex !== -1 && state.isPlaying;
@@ -276,6 +328,12 @@ async function playTrack(index, options = {}) {
   const nextPlayerIndex = useFade ? 1 - activePlayerIndex : activePlayerIndex;
   const nextPlayer = players[nextPlayerIndex];
   const previousPlayer = players[previousPlayerIndex];
+
+  if (previousPlayer) {
+    previousPlayer.audio.onended = null;
+    cancelAutoAdvance(previousPlayer);
+  }
+  cancelAutoAdvance(nextPlayer);
 
   if (nextPlayer.audio.src !== track.url) {
     nextPlayer.audio.src = track.url;
@@ -290,7 +348,9 @@ async function playTrack(index, options = {}) {
   }
 
   const now = audioContext.currentTime;
-  const fadeDuration = useFade ? Math.max(state.fadeDuration, CROSS_FADE_MIN) : CROSS_FADE_MIN;
+  const fallbackFade = Number.isFinite(state.fadeDuration) ? state.fadeDuration : CROSS_FADE_MIN;
+  const resolvedFade = Number.isFinite(fadeDurationOverride) ? fadeDurationOverride : fallbackFade;
+  const fadeDuration = useFade ? Math.max(resolvedFade, CROSS_FADE_MIN) : CROSS_FADE_MIN;
   nextPlayer.gain.gain.cancelScheduledValues(now);
   nextPlayer.gain.gain.setValueAtTime(useFade ? 0 : 1, now);
   nextPlayer.gain.gain.linearRampToValueAtTime(1, now + (useFade ? fadeDuration : 0.05));
@@ -318,9 +378,14 @@ async function playTrack(index, options = {}) {
   updateNowPlaying();
   renderPlaylist();
   updateControls();
+  scheduleAutoAdvance(nextPlayer, index);
 
   nextPlayer.audio.onended = () => {
     if (state.currentIndex !== index) {
+      return;
+    }
+    if (state.autoLoop && state.tracks[index]) {
+      playTrack(index, { fade: false }).catch(console.error);
       return;
     }
     const nextIndex = index + 1;
@@ -334,6 +399,8 @@ async function playTrack(index, options = {}) {
 
 function stopPlayback() {
   players.forEach(player => {
+    cancelAutoAdvance(player);
+    player.audio.onended = null;
     player.audio.pause();
     player.audio.currentTime = 0;
     player.gain.gain.setValueAtTime(0, audioContext.currentTime);
@@ -356,12 +423,29 @@ function updateNowPlaying() {
   nowPlayingEl.textContent = `${track.name}${duration}`;
 }
 
+function syncLoopToggle() {
+  if (!loopToggle) {
+    return;
+  }
+  const shouldDisable = !state.tracks.length;
+  loopToggle.disabled = shouldDisable;
+  if (shouldDisable && state.autoLoop) {
+    state.autoLoop = false;
+  }
+  loopToggle.checked = state.autoLoop;
+  const wrapper = loopToggle.closest('.loop-control');
+  if (wrapper) {
+    wrapper.classList.toggle('is-disabled', shouldDisable);
+  }
+}
+
 function updateControls() {
   togglePlayBtn.disabled = !state.tracks.length;
   togglePlayBtn.textContent = state.isPlaying ? 'Pausar' : 'Reproducir';
   prevTrackBtn.disabled = state.currentIndex <= 0;
   nextTrackBtn.disabled = state.currentIndex === -1 || state.currentIndex >= state.tracks.length - 1;
   clearPlaylistBtn.disabled = !state.tracks.length;
+  syncLoopToggle();
 }
 
 function renderPlaylist() {
