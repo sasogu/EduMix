@@ -14,6 +14,9 @@ const dropboxConnectBtn = document.getElementById('dropboxConnect');
 const dropboxSyncBtn = document.getElementById('dropboxSync');
 const dropboxDisconnectBtn = document.getElementById('dropboxDisconnect');
 const cloudSyncCard = document.querySelector('.cloud-sync');
+const waveformCanvas = document.getElementById('waveformCanvas');
+const waveformMessage = document.getElementById('waveformMessage');
+const waveformContainer = document.querySelector('.waveform');
 
 const STORAGE_KEYS = {
   playlist: 'edumix-playlist',
@@ -37,7 +40,7 @@ const state = {
 };
 
 const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-const players = [createPlayer(), createPlayer()];
+const players = [];
 let activePlayerIndex = 0;
 let dragIndex = null;
 let deferredPrompt = null;
@@ -53,9 +56,321 @@ const dropboxState = {
   error: null,
 };
 
+const waveformState = {
+  trackId: null,
+  peaks: null,
+  duration: 0,
+  progress: 0,
+};
+const waveformCache = new Map();
+let waveformResizeFrame = null;
+
 const CROSS_FADE_MIN = 0.2;
 const TOKEN_REFRESH_MARGIN = 90 * 1000;
 const TEMP_LINK_MARGIN = 60 * 1000;
+const WAVEFORM_SAMPLES = 800;
+
+function handleWaveformMetadata(player) {
+  if (!player.trackId) {
+    return;
+  }
+  const track = state.tracks.find(item => item.id === player.trackId);
+  if (!track) {
+    return;
+  }
+  const duration = player.audio.duration;
+  if (!Number.isFinite(duration) || duration <= 0) {
+    return;
+  }
+  if (!Number.isFinite(track.duration) || Math.abs(track.duration - duration) > 0.5) {
+    track.duration = duration;
+    if (waveformState.trackId === track.id) {
+      waveformState.duration = duration;
+    }
+    persistLocalPlaylist();
+  }
+}
+
+function handleWaveformProgress(player) {
+  if (!waveformCanvas || waveformState.trackId !== player.trackId || !waveformState.peaks || !waveformState.peaks.length) {
+    return;
+  }
+  const duration = waveformState.duration || player.audio.duration;
+  if (!Number.isFinite(duration) || duration <= 0) {
+    return;
+  }
+  const progress = Math.min(1, Math.max(0, player.audio.currentTime / duration));
+  if (Math.abs(progress - waveformState.progress) < 0.003) {
+    return;
+  }
+  waveformState.progress = progress;
+  drawWaveform(waveformState.peaks, waveformState.progress);
+}
+
+function prepareWaveformCanvas() {
+  if (!waveformCanvas) {
+    return { ctx: null, width: 0, height: 0, dpr: window.devicePixelRatio || 1 };
+  }
+  const dpr = window.devicePixelRatio || 1;
+  const displayWidth = Math.max(1, Math.floor(waveformCanvas.clientWidth || waveformCanvas.offsetWidth || 0));
+  const displayHeight = Math.max(1, Math.floor(waveformCanvas.clientHeight || 0));
+  if (!displayWidth || !displayHeight) {
+    return { ctx: null, width: displayWidth, height: displayHeight, dpr };
+  }
+  const targetWidth = Math.floor(displayWidth * dpr);
+  const targetHeight = Math.floor(displayHeight * dpr);
+  if (waveformCanvas.width !== targetWidth || waveformCanvas.height !== targetHeight) {
+    waveformCanvas.width = targetWidth;
+    waveformCanvas.height = targetHeight;
+  }
+  const ctx = waveformCanvas.getContext('2d');
+  if (!ctx) {
+    return { ctx: null, width: displayWidth, height: displayHeight, dpr };
+  }
+  if (typeof ctx.resetTransform === 'function') {
+    ctx.resetTransform();
+  } else {
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+  }
+  ctx.scale(dpr, dpr);
+  return { ctx, width: displayWidth, height: displayHeight, dpr };
+}
+
+function drawWaveform(peaks, progress = 0) {
+  const data = prepareWaveformCanvas();
+  const { ctx, width, height } = data;
+  if (!ctx || !width || !height) {
+    return;
+  }
+  ctx.clearRect(0, 0, width, height);
+  if (!peaks || !peaks.length) {
+    waveformContainer?.classList.remove('has-data');
+    return;
+  }
+  waveformContainer?.classList.add('has-data');
+  const mid = height / 2;
+  const ratio = peaks.length / width;
+  const strokeColor = 'rgba(74, 144, 226, 0.65)';
+  const baseFill = 'rgba(74, 144, 226, 0.25)';
+  const activeFill = 'rgba(74, 144, 226, 0.6)';
+
+  const drawShape = (fillColor, withStroke) => {
+    ctx.beginPath();
+    for (let x = 0; x < width; x += 1) {
+      const peakIndex = Math.min(peaks.length - 1, Math.floor(x * ratio));
+      const peak = peaks[peakIndex] || [0, 0];
+      const y = mid - (peak[1] ?? 0) * mid;
+      if (x === 0) {
+        ctx.moveTo(0, y);
+      } else {
+        ctx.lineTo(x, y);
+      }
+    }
+    for (let x = width - 1; x >= 0; x -= 1) {
+      const peakIndex = Math.min(peaks.length - 1, Math.floor(x * ratio));
+      const peak = peaks[peakIndex] || [0, 0];
+      const y = mid - (peak[0] ?? 0) * mid;
+      ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+    ctx.fillStyle = fillColor;
+    ctx.fill();
+    if (withStroke) {
+      ctx.strokeStyle = strokeColor;
+      ctx.lineWidth = Math.max(1, height / 160);
+      ctx.stroke();
+    }
+  };
+
+  drawShape(baseFill, true);
+  if (progress > 0) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, 0, Math.max(0, Math.min(width * progress, width)), height);
+    ctx.clip();
+    drawShape(activeFill, false);
+    ctx.restore();
+  }
+}
+
+function setWaveformTrack(track) {
+  if (!waveformCanvas || !waveformContainer) {
+    return;
+  }
+  if (!track) {
+    waveformState.trackId = null;
+    waveformState.peaks = null;
+    waveformState.duration = 0;
+    waveformState.progress = 0;
+    waveformContainer.classList.remove('is-loading');
+    waveformContainer.classList.remove('has-data');
+    if (waveformMessage) {
+      waveformMessage.textContent = 'Selecciona una pista para visualizar su forma de onda.';
+    }
+    drawWaveform(null, 0);
+    return;
+  }
+  waveformState.trackId = track.id;
+  waveformState.duration = track.duration ?? waveformState.duration ?? 0;
+  waveformState.progress = 0;
+  if (track.waveform?.peaks?.length) {
+    waveformState.peaks = track.waveform.peaks;
+    waveformState.duration = track.waveform.duration ?? waveformState.duration;
+    waveformContainer.classList.remove('is-loading');
+    drawWaveform(waveformState.peaks, waveformState.progress);
+  } else {
+    waveformState.peaks = null;
+    waveformContainer.classList.add('is-loading');
+    if (waveformMessage) {
+      waveformMessage.textContent = 'Generando forma de onda…';
+    }
+    drawWaveform(null, 0);
+    ensureWaveform(track)
+      .then(result => {
+        if (!result || waveformState.trackId !== track.id) {
+          return;
+        }
+        waveformState.peaks = result.peaks;
+        waveformState.duration = result.duration ?? waveformState.duration;
+        waveformContainer.classList.remove('is-loading');
+        drawWaveform(waveformState.peaks, waveformState.progress);
+      })
+      .catch(error => {
+        console.error('Error generando forma de onda', error);
+        if (waveformState.trackId === track.id) {
+          waveformContainer.classList.remove('is-loading');
+          waveformContainer.classList.remove('has-data');
+          if (waveformMessage) {
+            waveformMessage.textContent = 'No se pudo generar la forma de onda.';
+          }
+        }
+      });
+  }
+}
+
+function scheduleWaveformResize() {
+  if (!waveformCanvas) {
+    return;
+  }
+  if (waveformResizeFrame) {
+    cancelAnimationFrame(waveformResizeFrame);
+  }
+  waveformResizeFrame = requestAnimationFrame(() => {
+    waveformResizeFrame = null;
+    if (waveformState.peaks && waveformState.peaks.length) {
+      drawWaveform(waveformState.peaks, waveformState.progress);
+    } else {
+      drawWaveform(null, 0);
+    }
+  });
+}
+
+async function ensureWaveform(track) {
+  if (!track) {
+    return null;
+  }
+  if (track.waveform?.peaks?.length) {
+    return track.waveform;
+  }
+  if (waveformCache.has(track.id)) {
+    return waveformCache.get(track.id);
+  }
+  const promise = (async () => {
+    let arrayBuffer = null;
+    const file = pendingUploads.get(track.id);
+    if (file) {
+      arrayBuffer = await file.arrayBuffer();
+    } else if (track.isRemote || track.dropboxPath) {
+      const ready = await ensureTrackRemoteLink(track);
+      if (!ready) {
+        return null;
+      }
+      const response = await fetch(track.url, { mode: 'cors' });
+      if (!response.ok) {
+        throw new Error('No se pudo descargar la pista para la forma de onda');
+      }
+      arrayBuffer = await response.arrayBuffer();
+    } else if (track.url && track.url.startsWith('blob:')) {
+      try {
+        const response = await fetch(track.url);
+        if (response.ok) {
+          arrayBuffer = await response.arrayBuffer();
+        }
+      } catch (error) {
+        console.warn('No se pudo leer el blob local para la forma de onda', error);
+      }
+    }
+    if (!arrayBuffer) {
+      return null;
+    }
+    const waveform = await computeWaveformFromArrayBuffer(arrayBuffer);
+    track.waveform = waveform;
+    if ((!Number.isFinite(track.duration) || track.duration === null) && Number.isFinite(waveform.duration)) {
+      track.duration = waveform.duration;
+    }
+    persistLocalPlaylist();
+    requestDropboxSync();
+    return waveform;
+  })()
+    .catch(error => {
+      console.error('Error generando forma de onda', error);
+      waveformCache.delete(track.id);
+      return null;
+    });
+  waveformCache.set(track.id, promise);
+  return promise;
+}
+
+async function computeWaveformFromArrayBuffer(arrayBuffer) {
+  const buffer = await new Promise((resolve, reject) => {
+    const copy = arrayBuffer.slice(0);
+    audioContext.decodeAudioData(copy, resolve, reject);
+  });
+  const peaks = extractPeaks(buffer, WAVEFORM_SAMPLES);
+  return {
+    peaks,
+    duration: buffer.duration,
+  };
+}
+
+function extractPeaks(buffer, buckets) {
+  const channelCount = buffer.numberOfChannels;
+  const channelData = [];
+  for (let channel = 0; channel < channelCount; channel += 1) {
+    channelData.push(buffer.getChannelData(channel));
+  }
+  const totalSamples = buffer.length;
+  const bucketSize = Math.max(1, Math.floor(totalSamples / buckets));
+  const peaks = [];
+  for (let bucketIndex = 0; bucketIndex < buckets; bucketIndex += 1) {
+    const start = bucketIndex * bucketSize;
+    if (start >= totalSamples) {
+      break;
+    }
+    const end = Math.min(start + bucketSize, totalSamples);
+    let min = Infinity;
+    let max = -Infinity;
+    for (let channel = 0; channel < channelData.length; channel += 1) {
+      const data = channelData[channel];
+      for (let i = start; i < end; i += 1) {
+        const sample = data[i];
+        if (sample < min) {
+          min = sample;
+        }
+        if (sample > max) {
+          max = sample;
+        }
+      }
+    }
+    if (!Number.isFinite(min) || !Number.isFinite(max)) {
+      peaks.push([0, 0]);
+    } else {
+      peaks.push([Number(min.toFixed(3)), Number(max.toFixed(3))]);
+    }
+  }
+  return peaks;
+}
+
 
 function createPlayer() {
   const audio = new Audio();
@@ -65,8 +380,13 @@ function createPlayer() {
   gain.gain.value = 0;
   source.connect(gain);
   gain.connect(audioContext.destination);
-  return { audio, gain, stopTimeout: null, advanceHandler: null };
+  const player = { audio, gain, stopTimeout: null, advanceHandler: null, trackId: null };
+  audio.addEventListener('timeupdate', () => handleWaveformProgress(player));
+  audio.addEventListener('loadedmetadata', () => handleWaveformMetadata(player));
+  return player;
 }
+
+players.push(createPlayer(), createPlayer());
 
 function cancelAutoAdvance(player) {
   if (player.advanceHandler) {
@@ -114,6 +434,8 @@ async function ensureContextRunning() {
     await audioContext.resume();
   }
 }
+
+window.addEventListener('resize', scheduleWaveformResize);
 
 filePicker?.addEventListener('change', event => {
   const files = Array.from(event.target.files || []);
@@ -316,6 +638,7 @@ function addTracks(files) {
         dropboxRev: null,
         dropboxSize: null,
         dropboxUpdatedAt: null,
+        waveform: null,
         urlExpiresAt: 0,
         isRemote: false,
       };
@@ -327,6 +650,9 @@ function addTracks(files) {
     return;
   }
   state.tracks.push(...newTracks);
+  newTracks.forEach(track => {
+    ensureWaveform(track).catch(console.error);
+  });
   renderPlaylist();
   updateControls();
   persistLocalPlaylist();
@@ -339,6 +665,9 @@ function readDuration(track) {
   probe.preload = 'metadata';
   probe.addEventListener('loadedmetadata', () => {
     track.duration = probe.duration;
+    if (waveformState.trackId === track.id) {
+      waveformState.duration = track.duration;
+    }
     renderPlaylist();
     persistLocalPlaylist();
   }, { once: true });
@@ -353,6 +682,7 @@ function removeTrack(index) {
     URL.revokeObjectURL(track.url);
   }
   pendingUploads.delete(track.id);
+  waveformCache.delete(track.id);
   if (track.dropboxPath) {
     pendingDeletions.add(track.dropboxPath);
   }
@@ -369,6 +699,9 @@ function removeTrack(index) {
     }
   } else if (state.currentIndex > index) {
     state.currentIndex -= 1;
+  }
+  if (!state.tracks.length) {
+    setWaveformTrack(null);
   }
   renderPlaylist();
   updateControls();
@@ -438,6 +771,7 @@ async function playTrack(index, options = {}) {
     return;
   }
   const { fade = true, fadeDurationOverride } = options;
+  setWaveformTrack(track);
   await ensureContextRunning();
   if (track.isRemote) {
     const ready = await ensureTrackRemoteLink(track);
@@ -468,6 +802,7 @@ async function playTrack(index, options = {}) {
     }
   }
   nextPlayer.audio.currentTime = 0;
+  nextPlayer.trackId = track.id;
 
   let playError = null;
   try {
@@ -487,8 +822,17 @@ async function playTrack(index, options = {}) {
     }
   }
   if (playError) {
+    nextPlayer.trackId = null;
     console.error('No se pudo reproducir la pista', playError);
     return;
+  }
+
+  if (waveformState.trackId === track.id && Number.isFinite(track.duration)) {
+    waveformState.duration = track.duration;
+    waveformState.progress = 0;
+    if (waveformState.peaks && waveformState.peaks.length) {
+      drawWaveform(waveformState.peaks, waveformState.progress);
+    }
   }
 
   const now = audioContext.currentTime;
@@ -509,11 +853,13 @@ async function playTrack(index, options = {}) {
       previousPlayer.audio.pause();
       previousPlayer.audio.currentTime = 0;
       previousPlayer.gain.gain.setValueAtTime(0, audioContext.currentTime);
+      previousPlayer.trackId = null;
     }, fadeDuration * 1000 + 120);
   } else if (previousPlayerIndex !== nextPlayerIndex) {
     previousPlayer.audio.pause();
     previousPlayer.audio.currentTime = 0;
     previousPlayer.gain.gain.setValueAtTime(0, now);
+    previousPlayer.trackId = null;
   }
 
   activePlayerIndex = nextPlayerIndex;
@@ -549,12 +895,14 @@ function stopPlayback() {
     player.audio.currentTime = 0;
     player.gain.gain.setValueAtTime(0, audioContext.currentTime);
     window.clearTimeout(player.stopTimeout);
+    player.trackId = null;
   });
   state.currentIndex = -1;
   state.isPlaying = false;
   updateNowPlaying();
   renderPlaylist();
   updateControls();
+  setWaveformTrack(null);
 }
 
 function updateNowPlaying() {
@@ -674,6 +1022,7 @@ function persistLocalPlaylist() {
       dropboxRev: track.dropboxRev,
       dropboxSize: track.dropboxSize ?? null,
       dropboxUpdatedAt: track.dropboxUpdatedAt ?? null,
+      waveform: track.waveform ?? null,
     })),
     fadeDuration: state.fadeDuration,
     autoLoop: state.autoLoop,
@@ -723,6 +1072,7 @@ function loadLocalPlaylist() {
         dropboxRev: entry.dropboxRev ?? null,
         dropboxSize: entry.dropboxSize ?? null,
         dropboxUpdatedAt: entry.dropboxUpdatedAt ?? null,
+        waveform: entry.waveform ?? null,
         urlExpiresAt: 0,
         isRemote: Boolean(entry.dropboxPath),
       }));
@@ -1021,6 +1371,7 @@ async function saveDropboxPlaylist(token) {
         dropboxRev: track.dropboxRev,
         dropboxSize: track.dropboxSize,
         dropboxUpdatedAt: track.dropboxUpdatedAt,
+        waveform: track.waveform ?? null,
       })),
   };
   try {
@@ -1086,6 +1437,9 @@ async function pullDropboxPlaylist(token) {
         if (!existing.duration && entry.duration) {
           existing.duration = entry.duration;
         }
+        if (entry.waveform?.peaks?.length) {
+          existing.waveform = entry.waveform;
+        }
         merged.push(existing);
       } else {
         merged.push({
@@ -1100,6 +1454,7 @@ async function pullDropboxPlaylist(token) {
           dropboxRev: entry.dropboxRev ?? null,
           dropboxSize: entry.dropboxSize ?? null,
           dropboxUpdatedAt: entry.dropboxUpdatedAt ?? null,
+          waveform: entry.waveform ?? null,
           urlExpiresAt: 0,
           isRemote: true,
         });
@@ -1182,6 +1537,7 @@ function initialize() {
   loadLocalPlaylist();
   renderPlaylist();
   updateControls();
+  scheduleWaveformResize();
   fadeValue.textContent = `${state.fadeDuration.toFixed(1).replace(/\.0$/, '')} s`;
   if (isDropboxConnected()) {
     performDropboxSync({ loadRemote: true }).catch(console.error);
