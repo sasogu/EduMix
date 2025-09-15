@@ -69,6 +69,170 @@ const CROSS_FADE_MIN = 0.2;
 const TOKEN_REFRESH_MARGIN = 90 * 1000;
 const TEMP_LINK_MARGIN = 60 * 1000;
 const WAVEFORM_SAMPLES = 800;
+const IDB_CONFIG = {
+  name: 'edumix-media',
+  version: 1,
+  store: 'tracks',
+};
+let mediaDbPromise = null;
+
+function openMediaDatabase() {
+  if (!('indexedDB' in window)) {
+    return Promise.resolve(null);
+  }
+  if (mediaDbPromise) {
+    return mediaDbPromise;
+  }
+  mediaDbPromise = new Promise((resolve, reject) => {
+    const request = indexedDB.open(IDB_CONFIG.name, IDB_CONFIG.version);
+    request.onerror = () => reject(request.error);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(IDB_CONFIG.store)) {
+        db.createObjectStore(IDB_CONFIG.store, { keyPath: 'id' });
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+  }).catch(error => {
+    console.error('IndexedDB init error', error);
+    mediaDbPromise = null;
+    return null;
+  });
+  return mediaDbPromise;
+}
+
+async function storeTrackFile(id, file) {
+  const db = await openMediaDatabase();
+  if (!db) {
+    return;
+  }
+  const buffer = await file.arrayBuffer();
+  await new Promise((resolve, reject) => {
+    const tx = db.transaction(IDB_CONFIG.store, 'readwrite');
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error || new Error('No se pudo guardar el audio local'));
+    const record = {
+      id,
+      buffer,
+      type: file.type || 'audio/mpeg',
+      size: file.size || buffer.byteLength,
+      lastModified: file.lastModified || Date.now(),
+      name: file.name || id,
+    };
+    tx.objectStore(IDB_CONFIG.store).put(record);
+  }).catch(error => {
+    console.error('Error guardando audio local', error);
+  });
+}
+
+async function loadTrackFile(id) {
+  const db = await openMediaDatabase();
+  if (!db) {
+    return null;
+  }
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(IDB_CONFIG.store, 'readonly');
+    const request = tx.objectStore(IDB_CONFIG.store).get(id);
+    request.onsuccess = () => {
+      resolve(request.result || null);
+    };
+    request.onerror = () => {
+      reject(request.error);
+    };
+  }).catch(error => {
+    console.error('Error leyendo audio local', error);
+    return null;
+  });
+}
+
+async function deleteTrackFile(id) {
+  const db = await openMediaDatabase();
+  if (!db) {
+    return;
+  }
+  await new Promise((resolve, reject) => {
+    const tx = db.transaction(IDB_CONFIG.store, 'readwrite');
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+    tx.objectStore(IDB_CONFIG.store).delete(id);
+  }).catch(error => {
+    console.error('Error eliminando audio local', error);
+  });
+}
+
+async function ensureLocalTrackUrl(track) {
+  if (track.url && track.url.startsWith('blob:')) {
+    return true;
+  }
+  const file = pendingUploads.get(track.id);
+  if (file) {
+    if (!track.url || track.url === 'null') {
+      if (track.url) {
+        try {
+          URL.revokeObjectURL(track.url);
+        } catch (error) {
+          console.warn('No se pudo liberar la URL anterior', error);
+        }
+      }
+      track.url = URL.createObjectURL(file);
+    }
+    track.isRemote = false;
+    return true;
+  }
+  const stored = await loadTrackFile(track.id);
+  if (!stored) {
+    return false;
+  }
+  try {
+    if (track.url) {
+      URL.revokeObjectURL(track.url);
+    }
+  } catch (error) {
+    console.warn('No se pudo liberar URL antigua', error);
+  }
+  const blob = new Blob([stored.buffer], { type: stored.type || 'audio/mpeg' });
+  track.url = URL.createObjectURL(blob);
+  track.size = stored.size ?? blob.size;
+  track.lastModified = stored.lastModified ?? track.lastModified;
+  track.fileName = track.fileName || stored.name || `${track.id}.mp3`;
+  track.isRemote = false;
+  track.urlExpiresAt = 0;
+  return true;
+}
+
+async function restoreLocalMedia() {
+  if (!state.tracks.length) {
+    return;
+  }
+  const tasks = state.tracks.map(async track => {
+    if (track.dropboxPath) {
+      track.isRemote = true;
+      return;
+    }
+    track.isRemote = false;
+    if (track.url && track.url.startsWith('blob:')) {
+      return;
+    }
+    const stored = await loadTrackFile(track.id);
+    if (!stored) {
+      return;
+    }
+    const blob = new Blob([stored.buffer], { type: stored.type || 'audio/mpeg' });
+    if (track.url && track.url.startsWith('blob:')) {
+      try {
+        URL.revokeObjectURL(track.url);
+      } catch (error) {
+        console.warn('No se pudo liberar URL previa', error);
+      }
+    }
+    track.url = URL.createObjectURL(blob);
+    track.size = stored.size ?? blob.size;
+    track.fileName = track.fileName || stored.name || `${track.id}.mp3`;
+    track.lastModified = stored.lastModified ?? track.lastModified;
+    track.urlExpiresAt = 0;
+  });
+  await Promise.allSettled(tasks);
+}
 
 function handleWaveformMetadata(player) {
   if (!player.trackId) {
@@ -290,14 +454,19 @@ async function ensureWaveform(track) {
         throw new Error('No se pudo descargar la pista para la forma de onda');
       }
       arrayBuffer = await response.arrayBuffer();
-    } else if (track.url && track.url.startsWith('blob:')) {
-      try {
-        const response = await fetch(track.url);
-        if (response.ok) {
-          arrayBuffer = await response.arrayBuffer();
+    } else {
+      const stored = await loadTrackFile(track.id);
+      if (stored) {
+        arrayBuffer = stored.buffer;
+      } else if (track.url && track.url.startsWith('blob:')) {
+        try {
+          const response = await fetch(track.url);
+          if (response.ok) {
+            arrayBuffer = await response.arrayBuffer();
+          }
+        } catch (error) {
+          console.warn('No se pudo leer el blob local para la forma de onda', error);
         }
-      } catch (error) {
-        console.warn('No se pudo leer el blob local para la forma de onda', error);
       }
     }
     if (!arrayBuffer) {
@@ -452,10 +621,12 @@ clearPlaylistBtn?.addEventListener('click', () => {
     .filter(Boolean);
   removeRemotePaths.forEach(path => pendingDeletions.add(path));
   pendingUploads.clear();
+  waveformCache.clear();
   state.tracks.forEach(track => {
     if (!track.isRemote && track.url) {
       URL.revokeObjectURL(track.url);
     }
+    deleteTrackFile(track.id).catch(console.error);
   });
   state.tracks = [];
   stopPlayback();
@@ -643,6 +814,7 @@ function addTracks(files) {
         isRemote: false,
       };
       pendingUploads.set(track.id, file);
+      storeTrackFile(track.id, file).catch(console.error);
       readDuration(track);
       return track;
     });
@@ -683,6 +855,7 @@ function removeTrack(index) {
   }
   pendingUploads.delete(track.id);
   waveformCache.delete(track.id);
+  deleteTrackFile(track.id).catch(console.error);
   if (track.dropboxPath) {
     pendingDeletions.add(track.dropboxPath);
   }
@@ -754,6 +927,13 @@ async function ensureTrackRemoteLink(track) {
       throw new Error('No se pudo obtener enlace temporal');
     }
     const data = await response.json();
+    if (track.url && track.url.startsWith('blob:')) {
+      try {
+        URL.revokeObjectURL(track.url);
+      } catch (revokeError) {
+        console.warn('No se pudo liberar URL local previa', revokeError);
+      }
+    }
     track.url = data.link;
     track.urlExpiresAt = Date.now() + 3.5 * 60 * 60 * 1000;
     track.isRemote = true;
@@ -772,12 +952,39 @@ async function playTrack(index, options = {}) {
   }
   const { fade = true, fadeDurationOverride } = options;
   setWaveformTrack(track);
-  await ensureContextRunning();
-  if (track.isRemote) {
-    const ready = await ensureTrackRemoteLink(track);
+
+  let ready = true;
+  if (track.dropboxPath) {
+    ready = await ensureTrackRemoteLink(track);
     if (!ready) {
-      return;
+      ready = await ensureLocalTrackUrl(track);
     }
+  } else {
+    ready = await ensureLocalTrackUrl(track);
+  }
+  if (!ready) {
+    if (waveformContainer) {
+      waveformContainer.classList.remove('is-loading');
+      waveformContainer.classList.remove('has-data');
+    }
+    if (waveformMessage) {
+      waveformMessage.textContent = 'Audio no disponible. Vuelve a importarlo o sincronízalo con Dropbox.';
+    }
+    return;
+  }
+
+  await ensureContextRunning();
+
+  if (!track.url) {
+    console.warn('La pista no tiene una URL reproducible');
+    if (!track.dropboxPath) {
+      if (waveformMessage) {
+        waveformMessage.textContent = 'Audio local no disponible. Vuelve a importarlo.';
+      }
+    } else {
+      showDropboxError('No se pudo obtener el audio desde Dropbox.');
+    }
+    return;
   }
 
   const hasCurrent = state.currentIndex !== -1 && state.isPlaying;
@@ -1306,55 +1513,68 @@ async function performDropboxSync(options = {}) {
 }
 
 async function uploadPendingTracks(token) {
-  const promises = [];
-  state.tracks.forEach(track => {
+  const uploads = state.tracks.map(async track => {
     if (track.dropboxPath) {
       return;
     }
-    const file = pendingUploads.get(track.id);
+    let file = pendingUploads.get(track.id);
+    let uploadName = track.fileName || `${track.id}.mp3`;
+    if (!file) {
+      const stored = await loadTrackFile(track.id);
+      if (stored) {
+        const blob = new Blob([stored.buffer], { type: stored.type || 'audio/mpeg' });
+        uploadName = track.fileName || stored.name || uploadName;
+        if (typeof File === 'function') {
+          file = new File([blob], uploadName, {
+            type: stored.type || blob.type || 'audio/mpeg',
+            lastModified: stored.lastModified || track.lastModified || Date.now(),
+          });
+        } else {
+          file = blob;
+        }
+      }
+    } else if (typeof file.name === 'string') {
+      uploadName = file.name;
+    }
     if (!file) {
       return;
     }
-    const safeName = file.name.replace(/[^a-zA-Z0-9._-]+/g, '_');
-    const path = `/tracks/${track.id}-${safeName}`;
-    const uploadPromise = fetch('https://content.dropboxapi.com/2/files/upload', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/octet-stream',
-        'Dropbox-API-Arg': JSON.stringify({
-          path,
-          mode: 'overwrite',
-          mute: false,
-          autorename: false,
-        }),
-      },
-      body: file,
-    })
-      .then(async response => {
-        if (!response.ok) {
-          const text = await response.text();
-          throw new Error(text || 'Upload failed');
-        }
-        return response.json();
-      })
-      .then(metadata => {
-        track.dropboxPath = metadata.path_lower ?? metadata.path_display ?? path;
-        track.dropboxRev = metadata.rev;
-        track.dropboxSize = metadata.size;
-        track.dropboxUpdatedAt = Date.now();
-        track.isRemote = true;
-        track.urlExpiresAt = 0;
-        pendingUploads.delete(track.id);
-        persistLocalPlaylist();
-      })
-      .catch(error => {
-        console.error(`No se pudo subir ${track.fileName}`, error);
-        showDropboxError(`Error subiendo ${track.fileName}.`);
+    const safeName = (uploadName || track.fileName || track.id).replace(/[^a-zA-Z0-9._-]+/g, '_');
+    const remotePath = `/tracks/${track.id}-${safeName}`;
+    try {
+      const response = await fetch('https://content.dropboxapi.com/2/files/upload', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/octet-stream',
+          'Dropbox-API-Arg': JSON.stringify({
+            path: remotePath,
+            mode: 'overwrite',
+            mute: false,
+            autorename: false,
+          }),
+        },
+        body: file,
       });
-    promises.push(uploadPromise);
+      if (!response.ok) {
+        const textResponse = await response.text();
+        throw new Error(textResponse || 'Upload failed');
+      }
+      const metadata = await response.json();
+      track.dropboxPath = metadata.path_lower ?? metadata.path_display ?? remotePath;
+      track.dropboxRev = metadata.rev;
+      track.dropboxSize = metadata.size;
+      track.dropboxUpdatedAt = Date.now();
+      track.isRemote = true;
+      track.urlExpiresAt = 0;
+      pendingUploads.delete(track.id);
+      persistLocalPlaylist();
+    } catch (error) {
+      console.error(`No se pudo subir ${track.fileName}`, error);
+      showDropboxError(`Error subiendo ${track.fileName}.`);
+    }
   });
-  await Promise.all(promises);
+  await Promise.all(uploads);
 }
 
 async function saveDropboxPlaylist(token) {
@@ -1533,8 +1753,10 @@ function base64UrlEncode(buffer) {
     .replace(/=+$/g, '');
 }
 
-function initialize() {
+async function initialize() {
   loadLocalPlaylist();
+  await restoreLocalMedia();
+  await Promise.allSettled(state.tracks.filter(track => !track.dropboxPath).map(track => ensureLocalTrackUrl(track)));
   renderPlaylist();
   updateControls();
   scheduleWaveformResize();
@@ -1545,5 +1767,5 @@ function initialize() {
 }
 
 handleDropboxRedirect().catch(console.error).finally(() => {
-  initialize();
+  initialize().catch(console.error);
 });
