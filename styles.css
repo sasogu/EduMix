@@ -143,6 +143,11 @@ button.ghost:not(:disabled):hover {
   transform: translateY(-2px);
 }
 
+.track.is-remote:not(.is-playing) {
+  border-color: rgba(74, 144, 226, 0.32);
+  background: rgba(74, 144, 226, 0.12);
+}
+
 .track.dragging {
   opacity: 0.5;
 }
@@ -270,6 +275,77 @@ button.ghost:not(:disabled):hover {
   flex: 1;
 }
 
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.25rem 0.65rem;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  background: rgba(74, 144, 226, 0.14);
+  color: var(--primary);
+}
+
+.badge.is-error {
+  background: rgba(232, 93, 117, 0.2);
+  color: #b91c1c;
+}
+
+.cloud-sync {
+  margin-top: 1.25rem;
+  padding: 1rem;
+  border-radius: 0.9rem;
+  background: rgba(74, 144, 226, 0.08);
+  border: 1px solid rgba(74, 144, 226, 0.2);
+  display: grid;
+  gap: 0.65rem;
+}
+
+.cloud-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.cloud-header h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.cloud-hint {
+  margin: 0;
+  font-size: 0.85rem;
+  color: rgba(31, 38, 51, 0.7);
+}
+
+.cloud-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.cloud-actions button {
+  flex: none;
+}
+
+.cloud-sync button + button {
+  margin-left: 0;
+}
+
+.cloud-actions button.ghost {
+  border-color: rgba(74, 144, 226, 0.35);
+}
+
+.cloud-sync.is-syncing {
+  border-style: dashed;
+}
+
+.cloud-sync.is-error {
+  border-color: #e85d75;
+  background: rgba(232, 93, 117, 0.1);
+}
+
 footer {
   margin: auto 0 1.5rem;
   text-align: center;
@@ -315,12 +391,36 @@ footer {
     background: rgba(30, 41, 59, 0.8);
   }
 
+  .track.is-remote:not(.is-playing) {
+    background: rgba(74, 144, 226, 0.16);
+    border-color: rgba(148, 163, 184, 0.35);
+  }
+
   .loop-indicator {
     background: rgba(148, 163, 184, 0.35);
   }
 
   .loop-control input[type="checkbox"]:checked + .loop-indicator {
     background: rgba(74, 144, 226, 0.75);
+  }
+
+  .cloud-sync {
+    background: rgba(37, 54, 92, 0.55);
+    border-color: rgba(148, 163, 184, 0.35);
+  }
+
+  .cloud-hint {
+    color: rgba(226, 232, 240, 0.7);
+  }
+
+  .badge {
+    background: rgba(74, 144, 226, 0.2);
+    color: #dbeafe;
+  }
+
+  .badge.is-error {
+    background: rgba(248, 113, 113, 0.25);
+    color: #fecaca;
   }
 
   footer {

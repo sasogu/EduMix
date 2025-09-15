@@ -25,7 +25,19 @@
         <span>Agregar archivos de audio</span>
         <input type="file" id="filePicker" accept="audio/*" multiple />
       </label>
-      <p class="hint">Los archivos permanecen en esta sesión. Guarda la página como PWA para abrirlos rápidamente.</p>
+      <p class="hint">Los archivos permanecen en esta sesión o se guardan si sincronizas con Dropbox.</p>
+      <div class="cloud-sync">
+        <div class="cloud-header">
+          <h3>Sincronización en la nube</h3>
+          <span id="dropboxStatus" class="badge">Sin conectar</span>
+        </div>
+        <p class="cloud-hint">Conecta tu Dropbox para guardar y acceder a tus mezclas en cualquier dispositivo.</p>
+        <div class="cloud-actions">
+          <button id="dropboxConnect">Conectar con Dropbox</button>
+          <button id="dropboxSync" class="ghost" hidden>Sincronizar ahora</button>
+          <button id="dropboxDisconnect" class="ghost" hidden>Desconectar</button>
+        </div>
+      </div>
     </section>
 
     <section class="card" id="playlistSection">
