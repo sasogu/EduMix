@@ -438,13 +438,13 @@ async function playTrack(index, options = {}) {
     return;
   }
   const { fade = true, fadeDurationOverride } = options;
+  await ensureContextRunning();
   if (track.isRemote) {
     const ready = await ensureTrackRemoteLink(track);
     if (!ready) {
       return;
     }
   }
-  await ensureContextRunning();
 
   const hasCurrent = state.currentIndex !== -1 && state.isPlaying;
   const useFade = fade && hasCurrent;
@@ -461,13 +461,33 @@ async function playTrack(index, options = {}) {
 
   if (nextPlayer.audio.src !== track.url) {
     nextPlayer.audio.src = track.url;
+    try {
+      nextPlayer.audio.load();
+    } catch (loadError) {
+      console.warn('No se pudo preparar el audio', loadError);
+    }
   }
   nextPlayer.audio.currentTime = 0;
 
+  let playError = null;
   try {
     await nextPlayer.audio.play();
   } catch (error) {
-    console.error('No se pudo reproducir la pista', error);
+    playError = error;
+  }
+  if (playError) {
+    if (audioContext.state === 'suspended') {
+      try {
+        await ensureContextRunning();
+        await nextPlayer.audio.play();
+        playError = null;
+      } catch (retryError) {
+        playError = retryError;
+      }
+    }
+  }
+  if (playError) {
+    console.error('No se pudo reproducir la pista', playError);
     return;
   }
 
