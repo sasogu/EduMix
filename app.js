@@ -445,20 +445,20 @@ async function ensureWaveform(track) {
     const file = pendingUploads.get(track.id);
     if (file) {
       arrayBuffer = await file.arrayBuffer();
-    } else if (track.isRemote || track.dropboxPath) {
-      const ready = await ensureTrackRemoteLink(track);
-      if (!ready) {
-        return null;
-      }
-      const response = await fetch(track.url, { mode: 'cors' });
-      if (!response.ok) {
-        throw new Error('No se pudo descargar la pista para la forma de onda');
-      }
-      arrayBuffer = await response.arrayBuffer();
     } else {
       const stored = await loadTrackFile(track.id);
       if (stored) {
         arrayBuffer = stored.buffer;
+      } else if (track.isRemote || track.dropboxPath) {
+        const ready = await ensureTrackRemoteLink(track);
+        if (!ready) {
+          return null;
+        }
+        const response = await fetch(track.url, { mode: 'cors' });
+        if (!response.ok) {
+          throw new Error('No se pudo descargar la pista para la forma de onda');
+        }
+        arrayBuffer = await response.arrayBuffer();
       } else if (track.url && track.url.startsWith('blob:')) {
         try {
           const response = await fetch(track.url);
@@ -925,7 +925,23 @@ async function ensureTrackRemoteLink(track) {
       body: JSON.stringify({ path: track.dropboxPath }),
     });
     if (!response.ok) {
-      throw new Error('No se pudo obtener enlace temporal');
+      let details = '';
+      try {
+        details = await response.text();
+      } catch (readError) {
+        details = String(readError);
+      }
+      const summary = (() => {
+        try {
+          const parsed = JSON.parse(details);
+          return parsed?.error_summary || details;
+        } catch {
+          return details;
+        }
+      })();
+      const errorInfo = new Error(summary || 'No se pudo obtener enlace temporal');
+      errorInfo.responseStatus = response.status;
+      throw errorInfo;
     }
     const data = await response.json();
     if (track.url && track.url.startsWith('blob:')) {
@@ -941,7 +957,11 @@ async function ensureTrackRemoteLink(track) {
     return true;
   } catch (error) {
     console.error('Error obteniendo enlace temporal', error);
-    showDropboxError('No se pudo obtener el audio desde Dropbox.');
+    if (typeof error?.message === 'string' && error.message.includes('not_found')) {
+      showDropboxError('No se encontró el archivo en Dropbox, intenta sincronizar de nuevo.');
+    } else {
+      showDropboxError('No se pudo obtener el audio desde Dropbox.');
+    }
     return false;
   }
 }
