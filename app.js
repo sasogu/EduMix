@@ -27,6 +27,7 @@ const STORAGE_KEYS = {
 const dropboxConfig = {
   clientId: '0rx3ya88whuu3br',
   playlistPath: '/playlist.json',
+  scopes: 'files.metadata.read files.content.read files.content.write',
 };
 
 dropboxConfig.redirectUri = `${window.location.origin}${window.location.pathname}`;
@@ -1368,6 +1369,7 @@ async function beginDropboxAuth() {
     code_challenge: codeChallenge,
     code_challenge_method: 'S256',
     token_access_type: 'offline',
+    scope: dropboxConfig.scopes,
     state: stateToken,
   });
   window.location.href = `https://www.dropbox.com/oauth2/authorize?${params.toString()}`;
