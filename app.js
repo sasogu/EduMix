@@ -955,13 +955,22 @@ dropboxDisconnectBtn?.addEventListener('click', () => {
 });
 
 function addTracks(files) {
-  const newTracks = files
+  const audioFiles = files
     .filter(file => file.type.startsWith('audio/'))
+    .sort((a, b) => {
+      const pathA = (a.webkitRelativePath && a.webkitRelativePath.length ? a.webkitRelativePath : a.name) || '';
+      const pathB = (b.webkitRelativePath && b.webkitRelativePath.length ? b.webkitRelativePath : b.name) || '';
+      return pathA.localeCompare(pathB, undefined, { numeric: true, sensitivity: 'base' });
+    });
+  const newTracks = audioFiles
     .map(file => {
       const url = URL.createObjectURL(file);
+      const relativePath = (file.webkitRelativePath && file.webkitRelativePath.length ? file.webkitRelativePath : file.name) || file.name;
+      const normalizedPath = relativePath.replace(/^[\\/]+/, '').replace(/\\/g, '/');
+      const displayName = normalizedPath.replace(/\.[^/.]+$/, '');
       const track = {
         id: crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`,
-        name: file.name.replace(/\.[^/.]+$/, ''),
+        name: displayName,
         fileName: file.name,
         url,
         duration: null,
