@@ -663,6 +663,9 @@ playlistEl?.addEventListener('click', event => {
     case 'play':
       playTrack(index).catch(console.error);
       break;
+    case 'rename':
+      renameTrack(index);
+      break;
     case 'remove':
       removeTrack(index);
       break;
@@ -880,6 +883,26 @@ function removeTrack(index) {
   }
   renderPlaylist();
   updateControls();
+  persistLocalPlaylist();
+  requestDropboxSync();
+}
+
+function renameTrack(index) {
+  const track = state.tracks[index];
+  if (!track) {
+    return;
+  }
+  const proposed = prompt('Nuevo nombre de la pista', track.name || track.fileName || '');
+  if (proposed === null) {
+    return;
+  }
+  const nextName = proposed.trim();
+  if (!nextName || nextName === track.name) {
+    return;
+  }
+  track.name = nextName;
+  renderPlaylist();
+  updateNowPlaying();
   persistLocalPlaylist();
   requestDropboxSync();
 }
@@ -1233,13 +1256,19 @@ function renderPlaylist() {
     playButton.dataset.action = 'play';
     playButton.dataset.index = String(index);
 
+    const renameButton = document.createElement('button');
+    renameButton.className = 'ghost';
+    renameButton.textContent = 'Renombrar';
+    renameButton.dataset.action = 'rename';
+    renameButton.dataset.index = String(index);
+
     const removeButton = document.createElement('button');
     removeButton.className = 'ghost';
     removeButton.textContent = 'Eliminar';
     removeButton.dataset.action = 'remove';
     removeButton.dataset.index = String(index);
 
-    actions.append(playButton, removeButton);
+    actions.append(playButton, renameButton, removeButton);
     item.append(handle, title, actions);
     playlistEl.append(item);
   });
