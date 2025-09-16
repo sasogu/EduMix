@@ -545,6 +545,7 @@ function extractPeaks(buffer, buckets) {
 function createPlayer() {
   const audio = new Audio();
   audio.preload = 'auto';
+  audio.crossOrigin = 'anonymous';
   const source = audioContext.createMediaElementSource(audio);
   const gain = audioContext.createGain();
   gain.gain.value = 0;
@@ -907,7 +908,7 @@ async function ensureTrackRemoteLink(track) {
     return false;
   }
   const now = Date.now();
-  if (track.url && track.urlExpiresAt && now + TEMP_LINK_MARGIN < track.urlExpiresAt) {
+  if (track.url && track.url.startsWith('blob:')) {
     return true;
   }
   const token = await ensureDropboxToken();
@@ -944,6 +945,15 @@ async function ensureTrackRemoteLink(track) {
       throw errorInfo;
     }
     const data = await response.json();
+    const download = await fetch(data.link);
+    if (!download.ok) {
+      throw new Error('No se pudo descargar el archivo de Dropbox');
+    }
+    const blob = await download.blob();
+    const fileName = track.fileName || data.metadata?.name || `${track.id}.mp3`;
+    const fileType = blob.type || download.headers.get('Content-Type') || 'audio/mpeg';
+    const fileLike = typeof File === 'function' ? new File([blob], fileName, { type: fileType, lastModified: Date.now() }) : blob;
+    await storeTrackFile(track.id, fileLike).catch(console.error);
     if (track.url && track.url.startsWith('blob:')) {
       try {
         URL.revokeObjectURL(track.url);
@@ -951,9 +961,12 @@ async function ensureTrackRemoteLink(track) {
         console.warn('No se pudo liberar URL local previa', revokeError);
       }
     }
-    track.url = data.link;
-    track.urlExpiresAt = Date.now() + 3.5 * 60 * 60 * 1000;
+    track.url = URL.createObjectURL(blob);
+    track.size = blob.size;
+    track.fileName = fileName;
+    track.lastModified = Date.now();
     track.isRemote = true;
+    track.urlExpiresAt = 0;
     return true;
   } catch (error) {
     console.error('Error obteniendo enlace temporal', error);
