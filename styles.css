@@ -205,6 +205,20 @@ button.ghost:not(:disabled):hover {
   gap: 0.4rem;
 }
 
+.track-actions .icon-button {
+  width: 2.5rem;
+  height: 2.5rem;
+  padding: 0.35rem;
+  font-size: 1.1rem;
+  justify-content: center;
+  align-items: center;
+  display: inline-flex;
+}
+
+.track-actions .icon-button:disabled {
+  opacity: 0.45;
+}
+
 .playback-controls {
   display: flex;
   align-items: center;

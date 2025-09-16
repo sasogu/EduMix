@@ -1012,6 +1012,11 @@ function removeTrack(index) {
   if (!track) {
     return;
   }
+  const displayName = track.name || track.fileName || 'esta pista';
+  const confirmed = window.confirm(`¿Eliminar "${displayName}" de la lista?`);
+  if (!confirmed) {
+    return;
+  }
   if (!track.isRemote && track.url) {
     URL.revokeObjectURL(track.url);
   }
@@ -1408,20 +1413,27 @@ function renderPlaylist() {
     actions.className = 'track-actions';
 
     const playButton = document.createElement('button');
-    playButton.className = 'ghost';
-    playButton.textContent = index === state.currentIndex && state.isPlaying ? 'Reproduciendo' : 'Reproducir';
+    playButton.className = 'ghost icon-button';
+    const isPlayingTrack = index === state.currentIndex && state.isPlaying;
+    playButton.textContent = isPlayingTrack ? '♪' : '▶';
+    playButton.title = isPlayingTrack ? 'Reproduciendo' : 'Reproducir';
+    playButton.setAttribute('aria-label', playButton.title);
     playButton.dataset.action = 'play';
     playButton.dataset.index = String(index);
 
     const renameButton = document.createElement('button');
-    renameButton.className = 'ghost';
-    renameButton.textContent = 'Renombrar';
+    renameButton.className = 'ghost icon-button';
+    renameButton.textContent = '✎';
+    renameButton.title = 'Renombrar pista';
+    renameButton.setAttribute('aria-label', 'Renombrar pista');
     renameButton.dataset.action = 'rename';
     renameButton.dataset.index = String(index);
 
     const removeButton = document.createElement('button');
-    removeButton.className = 'ghost';
-    removeButton.textContent = 'Eliminar';
+    removeButton.className = 'ghost icon-button';
+    removeButton.textContent = '🗑';
+    removeButton.title = 'Eliminar pista';
+    removeButton.setAttribute('aria-label', 'Eliminar pista');
     removeButton.dataset.action = 'remove';
     removeButton.dataset.index = String(index);
 
