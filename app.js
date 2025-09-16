@@ -27,7 +27,7 @@ const STORAGE_KEYS = {
 };
 
 const dropboxConfig = {
-  clientId: '0rx3ya88whuu3br',
+  clientId: '118rcuago5bvt6j',
   playlistPath: '/playlist.json',
   scopes: 'files.metadata.read files.content.read files.content.write',
 };
