@@ -954,6 +954,8 @@ async function playTrack(index, options = {}) {
   const { fade = true, fadeDurationOverride } = options;
   setWaveformTrack(track);
 
+  await ensureContextRunning();
+
   let ready = true;
   if (track.dropboxPath) {
     ready = await ensureTrackRemoteLink(track);
@@ -974,8 +976,6 @@ async function playTrack(index, options = {}) {
     return;
   }
 
-  await ensureContextRunning();
-
   if (!track.url) {
     console.warn('La pista no tiene una URL reproducible');
     if (!track.dropboxPath) {
@@ -987,6 +987,8 @@ async function playTrack(index, options = {}) {
     }
     return;
   }
+
+  await ensureContextRunning();
 
   const hasCurrent = state.currentIndex !== -1 && state.isPlaying;
   const useFade = fade && hasCurrent;
@@ -1013,19 +1015,17 @@ async function playTrack(index, options = {}) {
   nextPlayer.trackId = track.id;
 
   let playError = null;
-  try {
-    await nextPlayer.audio.play();
-  } catch (error) {
-    playError = error;
-  }
-  if (playError) {
-    if (audioContext.state === 'suspended') {
-      try {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    playError = null;
+    try {
+      await nextPlayer.audio.play();
+      break;
+    } catch (error) {
+      playError = error;
+      if (attempt === 0) {
         await ensureContextRunning();
-        await nextPlayer.audio.play();
-        playError = null;
-      } catch (retryError) {
-        playError = retryError;
+        await new Promise(resolve => setTimeout(resolve, 40));
+        continue;
       }
     }
   }
