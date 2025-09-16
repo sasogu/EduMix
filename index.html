@@ -19,40 +19,7 @@
     <button id="installButton" hidden>Instalar app</button>
   </header>
   <main>
-    <section class="card" id="addSection">
-      <h2>Selecciona tus archivos</h2>
-      <label class="file-input">
-        <span>Agregar archivos de audio</span>
-        <input type="file" id="filePicker" accept="audio/*" multiple webkitdirectory directory mozdirectory />
-      </label>
-      <p class="hint">Los archivos permanecen en esta sesión o se guardan si sincronizas con Dropbox.</p>
-      <div class="cloud-sync">
-        <div class="cloud-header">
-          <h3>Sincronización en la nube</h3>
-          <span id="dropboxStatus" class="badge">Sin conectar</span>
-        </div>
-        <p class="cloud-hint">Conecta tu Dropbox para guardar y acceder a tus mezclas en cualquier dispositivo.</p>
-        <div class="cloud-actions">
-          <button id="dropboxConnect">Conectar con Dropbox</button>
-          <button id="dropboxSync" class="ghost" hidden>Sincronizar ahora</button>
-          <button id="dropboxDisconnect" class="ghost" hidden>Desconectar</button>
-        </div>
-      </div>
-    </section>
-
-    <section class="card" id="playlistSection">
-      <div class="section-heading">
-        <h2>Lista de reproducción</h2>
-        <div class="section-actions">
-          <select id="playlistPicker" aria-label="Selecciona una lista"></select>
-          <button id="newPlaylist" class="ghost">Nueva lista</button>
-          <button id="clearPlaylist" class="ghost">Vaciar</button>
-        </div>
-      </div>
-      <ul id="playlist" aria-live="polite"></ul>
-    </section>
-
-    <section class="card" id="nowPlayingSection">
+ <section class="card" id="nowPlayingSection">
       <h2>Reproducción</h2>
       <div id="nowPlaying">Ninguna pista seleccionada</div>
       <div class="playback-controls">
@@ -75,10 +42,42 @@
         <div id="waveformMessage">Selecciona una pista para visualizar su forma de onda.</div>
       </div>
     </section>
+    <section class="card" id="playlistSection">
+      <div class="section-heading">
+        <h2>Lista de reproducción</h2>
+        <div class="section-actions">
+          <select id="playlistPicker" aria-label="Selecciona una lista"></select>
+          <button id="newPlaylist" class="ghost">Nueva lista</button>
+          <button id="clearPlaylist" class="ghost">Vaciar</button>
+        </div>
+      </div>
+      <ul id="playlist" aria-live="polite"></ul>
+    </section>
+    <section class="card" id="addSection">
+      <h2>Selecciona tus archivos</h2>
+      <label class="file-input">
+        <span>Agregar archivos de audio</span>
+        <input type="file" id="filePicker" accept="audio/*" multiple webkitdirectory directory mozdirectory />
+      </label>
+      <p class="hint">Los archivos permanecen en esta sesión o se guardan si sincronizas con Dropbox.</p>
+      <div class="cloud-sync">
+        <div class="cloud-header">
+          <h3>Sincronización en la nube</h3>
+          <span id="dropboxStatus" class="badge">Sin conectar</span>
+        </div>
+        <p class="cloud-hint">Conecta tu Dropbox para guardar y acceder a tus mezclas en cualquier dispositivo.</p>
+        <div class="cloud-actions">
+          <button id="dropboxConnect">Conectar con Dropbox</button>
+          <button id="dropboxSync" class="ghost" hidden>Sincronizar ahora</button>
+          <button id="dropboxDisconnect" class="ghost" hidden>Desconectar</button>
+        </div>
+      </div>
+    </section>
+   
   </main>
 
   <footer>
-    <p>EduMix v0.2.0</p>
+    <p>EduMix v0.2.1</p>
   </footer>
 
   <script type="module" src="app.js"></script>
