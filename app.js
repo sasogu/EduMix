@@ -1035,6 +1035,8 @@ async function playTrack(index, options = {}) {
     cancelAutoAdvance(previousPlayer);
   }
   cancelAutoAdvance(nextPlayer);
+  window.clearTimeout(nextPlayer.stopTimeout);
+  nextPlayer.stopTimeout = null;
 
   if (nextPlayer.audio.src !== track.url) {
     nextPlayer.audio.src = track.url;
@@ -1090,7 +1092,11 @@ async function playTrack(index, options = {}) {
     previousPlayer.gain.gain.setValueAtTime(currentValue, now);
     previousPlayer.gain.gain.linearRampToValueAtTime(0, now + fadeDuration);
     window.clearTimeout(previousPlayer.stopTimeout);
+    const fadedTrackId = previousPlayer.trackId;
     previousPlayer.stopTimeout = window.setTimeout(() => {
+      if (previousPlayer.trackId !== fadedTrackId) {
+        return;
+      }
       previousPlayer.audio.pause();
       previousPlayer.audio.currentTime = 0;
       previousPlayer.gain.gain.setValueAtTime(0, audioContext.currentTime);
