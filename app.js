@@ -3,6 +3,7 @@ const filePicker = document.getElementById('filePicker');
 const togglePlayBtn = document.getElementById('togglePlay');
 const prevTrackBtn = document.getElementById('prevTrack');
 const nextTrackBtn = document.getElementById('nextTrack');
+const shuffleToggleBtn = document.getElementById('shuffleToggle');
 const nowPlayingEl = document.getElementById('nowPlaying');
 const clearPlaylistBtn = document.getElementById('clearPlaylist');
 const playlistPicker = document.getElementById('playlistPicker');
@@ -46,7 +47,17 @@ const state = {
   isPlaying: false,
   fadeDuration: Number(fadeSlider?.value ?? 3),
   autoLoop: Boolean(loopToggle?.checked),
+  shuffle: false,
 };
+
+// Estado de reproducción aleatoria
+let shuffleQueue = [];
+let shuffleHistory = [];
+
+function invalidateShuffle() {
+  shuffleQueue = [];
+  shuffleHistory = [];
+}
 
 let audioContext = null;
 const players = [];
@@ -112,6 +123,9 @@ function getActivePlaylist() {
 function syncTracksFromActivePlaylist() {
   const active = getActivePlaylist();
   state.tracks = active ? active.tracks : [];
+  // Invalida cola/historial de aleatorio al cambiar de lista
+  shuffleQueue = [];
+  shuffleHistory = [];
 }
 
 function ensurePlaylistsInitialized() {
@@ -140,6 +154,69 @@ function renderPlaylistPicker() {
   const targetValue = state.activePlaylistId || previous || (state.playlists[0] && state.playlists[0].id) || '';
   playlistPicker.value = targetValue;
   playlistPicker.disabled = state.playlists.length <= 1;
+}
+
+function buildShuffledIndices(excludeIndex = -1) {
+  const indices = state.tracks.map((_, i) => i).filter(i => i !== excludeIndex);
+  for (let i = indices.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [indices[i], indices[j]] = [indices[j], indices[i]];
+  }
+  return indices;
+}
+
+function ensureShuffleQueue() {
+  if (!state.shuffle) return;
+  const valid = shuffleQueue.every(i => i >= 0 && i < state.tracks.length);
+  if (!valid || shuffleQueue.length === 0) {
+    shuffleQueue = buildShuffledIndices(state.currentIndex);
+  }
+}
+
+function getStartIndex() {
+  if (!state.shuffle) return 0;
+  if (state.tracks.length <= 1) return 0;
+  const candidates = buildShuffledIndices(-1);
+  return candidates[0] ?? 0;
+}
+
+function getNextIndex() {
+  if (state.autoLoop && state.currentIndex !== -1) {
+    return state.currentIndex;
+  }
+  if (!state.shuffle) {
+    const next = state.currentIndex + 1;
+    return next < state.tracks.length ? next : -1;
+  }
+  ensureShuffleQueue();
+  const next = shuffleQueue.shift();
+  if (typeof next === 'number') {
+    if (state.currentIndex !== -1) {
+      shuffleHistory.push(state.currentIndex);
+    }
+    return next;
+  }
+  // Si no hay siguiente y hay más de una pista, reconstruir excluyendo la actual
+  if (state.tracks.length > 1) {
+    shuffleQueue = buildShuffledIndices(state.currentIndex);
+    const n = shuffleQueue.shift();
+    if (typeof n === 'number') {
+      if (state.currentIndex !== -1) {
+        shuffleHistory.push(state.currentIndex);
+      }
+      return n;
+    }
+  }
+  return -1;
+}
+
+function getPrevIndex() {
+  if (!state.shuffle) {
+    const prev = state.currentIndex - 1;
+    return prev >= 0 ? prev : -1;
+  }
+  const prev = shuffleHistory.pop();
+  return typeof prev === 'number' ? prev : -1;
 }
 
 function setActivePlaylist(id) {
@@ -809,9 +886,11 @@ function scheduleAutoAdvance(player, index) {
       if (state.autoLoop && state.tracks[index]) {
         playTrack(index, { fadeDurationOverride: fadeWindow }).catch(console.error);
       } else {
-        const nextIndex = index + 1;
-        if (nextIndex < state.tracks.length) {
+        const nextIndex = getNextIndex();
+        if (nextIndex !== -1) {
           playTrack(nextIndex, { fadeDurationOverride: fadeWindow }).catch(console.error);
+        } else {
+          stopPlayback();
         }
       }
     }
@@ -860,6 +939,7 @@ clearPlaylistBtn?.addEventListener('click', () => {
   });
   state.tracks.splice(0, state.tracks.length);
   stopPlayback();
+  invalidateShuffle();
   renderPlaylist();
   updateControls();
   persistLocalPlaylist();
@@ -890,6 +970,19 @@ renamePlaylistBtn?.addEventListener('click', () => {
 
 deletePlaylistBtn?.addEventListener('click', () => {
   deleteActivePlaylist();
+});
+
+shuffleToggleBtn?.addEventListener('click', () => {
+  state.shuffle = !state.shuffle;
+  if (state.shuffle) {
+    shuffleQueue = buildShuffledIndices(state.currentIndex);
+    shuffleHistory = [];
+  } else {
+    shuffleQueue = [];
+    shuffleHistory = [];
+  }
+  updateControls();
+  persistLocalPlaylist();
 });
 
 fadeSlider?.addEventListener('input', () => {
@@ -981,7 +1074,8 @@ togglePlayBtn?.addEventListener('click', () => {
   }
   ensurePlayers();
   if (state.currentIndex === -1) {
-    playTrack(0).catch(console.error);
+    const start = getStartIndex();
+    playTrack(start).catch(console.error);
     return;
   }
   const currentPlayer = players[activePlayerIndex];
@@ -1004,14 +1098,16 @@ togglePlayBtn?.addEventListener('click', () => {
 });
 
 prevTrackBtn?.addEventListener('click', () => {
-  if (state.currentIndex > 0) {
-    playTrack(state.currentIndex - 1).catch(console.error);
+  const prev = getPrevIndex();
+  if (prev !== -1) {
+    playTrack(prev).catch(console.error);
   }
 });
 
 nextTrackBtn?.addEventListener('click', () => {
-  if (state.currentIndex + 1 < state.tracks.length) {
-    playTrack(state.currentIndex + 1).catch(console.error);
+  const next = getNextIndex();
+  if (next !== -1) {
+    playTrack(next).catch(console.error);
   }
 });
 
@@ -1103,6 +1199,7 @@ function addTracks(files) {
   newTracks.forEach(track => {
     ensureWaveform(track).catch(console.error);
   });
+  invalidateShuffle();
   renderPlaylist();
   updateControls();
   persistLocalPlaylist();
@@ -1143,6 +1240,7 @@ function removeTrack(index) {
     pendingDeletions.add(track.dropboxPath);
   }
   state.tracks.splice(index, 1);
+  invalidateShuffle();
   if (state.currentIndex === index) {
     if (state.tracks.length) {
       const fallback = Math.min(index, state.tracks.length - 1);
@@ -1191,6 +1289,7 @@ function reorderTracks(from, to) {
   }
   const [moved] = state.tracks.splice(from, 1);
   state.tracks.splice(to, 0, moved);
+  invalidateShuffle();
   if (state.currentIndex === from) {
     state.currentIndex = to;
   } else if (state.currentIndex > from && state.currentIndex <= to) {
@@ -1423,16 +1522,16 @@ async function playTrack(index, options = {}) {
     if (state.currentIndex !== index) {
       return;
     }
-    if (state.autoLoop && state.tracks[index]) {
-      playTrack(index, { fade: false }).catch(console.error);
-      return;
-    }
-    const nextIndex = index + 1;
-    if (nextIndex < state.tracks.length) {
-      playTrack(nextIndex, { fade: false }).catch(console.error);
-    } else {
-      stopPlayback();
-    }
+  if (state.autoLoop && state.tracks[index]) {
+    playTrack(index, { fade: false }).catch(console.error);
+    return;
+  }
+  const nextIndex = getNextIndex();
+  if (nextIndex !== -1) {
+    playTrack(nextIndex, { fade: false }).catch(console.error);
+  } else {
+    stopPlayback();
+  }
   };
 }
 
@@ -1488,14 +1587,25 @@ function syncLoopToggle() {
 function updateControls() {
   togglePlayBtn.disabled = !state.tracks.length;
   togglePlayBtn.textContent = state.isPlaying ? 'Pausar' : 'Reproducir';
-  prevTrackBtn.disabled = state.currentIndex <= 0;
-  nextTrackBtn.disabled = state.currentIndex === -1 || state.currentIndex >= state.tracks.length - 1;
+  if (state.shuffle) {
+    prevTrackBtn.disabled = shuffleHistory.length === 0;
+    nextTrackBtn.disabled = state.tracks.length <= 1;
+  } else {
+    prevTrackBtn.disabled = state.currentIndex <= 0;
+    nextTrackBtn.disabled = state.currentIndex === -1 || state.currentIndex >= state.tracks.length - 1;
+  }
   clearPlaylistBtn.disabled = !state.tracks.length;
   if (deletePlaylistBtn) {
     deletePlaylistBtn.disabled = state.playlists.length <= 1;
   }
   if (renamePlaylistBtn) {
     renamePlaylistBtn.disabled = !state.playlists.length;
+  }
+  if (shuffleToggleBtn) {
+    shuffleToggleBtn.disabled = state.tracks.length <= 1;
+    shuffleToggleBtn.classList.toggle('is-active', !!state.shuffle);
+    shuffleToggleBtn.setAttribute('aria-pressed', state.shuffle ? 'true' : 'false');
+    shuffleToggleBtn.title = state.shuffle ? 'Aleatorio activado' : 'Reproducción aleatoria';
   }
   syncLoopToggle();
   updateDropboxUI();
@@ -1602,6 +1712,7 @@ function persistLocalPlaylist() {
     activePlaylistId: state.activePlaylistId,
     fadeDuration: state.fadeDuration,
     autoLoop: state.autoLoop,
+    shuffle: state.shuffle,
     pendingDeletions: Array.from(pendingDeletions),
     updatedAt: Date.now(),
   };
@@ -1635,6 +1746,9 @@ function loadLocalPlaylist() {
       if (loopToggle) {
         loopToggle.checked = state.autoLoop;
       }
+    }
+    if (typeof data?.shuffle === 'boolean') {
+      state.shuffle = data.shuffle;
     }
     if (Array.isArray(data?.playlists)) {
       state.playlists = data.playlists.map(playlist => ({
@@ -2070,6 +2184,7 @@ async function saveDropboxPlaylist(token) {
     activePlaylistId: state.activePlaylistId,
     fadeDuration: state.fadeDuration,
     autoLoop: state.autoLoop,
+    shuffle: state.shuffle,
     playlists: state.playlists.map(playlist => ({
       id: playlist.id,
       name: playlist.name,
@@ -2240,6 +2355,9 @@ async function pullDropboxPlaylist(token) {
         if (loopToggle) {
           loopToggle.checked = state.autoLoop;
         }
+      }
+      if (typeof json.shuffle === 'boolean') {
+        state.shuffle = json.shuffle;
       }
       ensurePlaylistsInitialized();
       fadeValue.textContent = `${state.fadeDuration.toFixed(1).replace(/\.0$/, '')} s`;

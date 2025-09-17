@@ -219,6 +219,11 @@ button.ghost:not(:disabled):hover {
   opacity: 0.45;
 }
 
+.icon-button.is-active {
+  background: rgba(74, 144, 226, 0.12);
+  border-color: rgba(74, 144, 226, 0.45);
+}
+
 .playback-controls {
   display: flex;
   align-items: center;
