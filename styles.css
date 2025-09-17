@@ -224,6 +224,19 @@ button.ghost:not(:disabled):hover {
   border-color: rgba(74, 144, 226, 0.45);
 }
 
+/* Indicadores de estado de pista */
+.track-flags {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.track-flag {
+  font-size: 0.95rem;
+  line-height: 1;
+  opacity: 0.8;
+}
+
 .playback-controls {
   display: flex;
   align-items: center;

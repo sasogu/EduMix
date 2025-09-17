@@ -35,7 +35,11 @@ const STORAGE_KEYS = {
 
 const dropboxConfig = {
   clientId: '118rcuago5bvt6j',
+  // Legacy single-file path
   playlistPath: '/playlist.json',
+  // New per-list layout
+  playlistsDir: '/Playlists',
+  settingsPath: '/Playlists/_settings.json',
   scopes: 'files.metadata.read files.content.read files.content.write',
 };
 
@@ -81,6 +85,13 @@ const dropboxState = {
 };
 dropboxState.progressTotal = 0;
 dropboxState.progressDone = 0;
+// Metadatos de playlist.json en Dropbox (control de versión)
+// Metadatos del fichero único (legacy)
+let dropboxPlaylistMeta = { rev: null, serverModified: null };
+// Metadatos por lista en modo per-list (id -> { path, rev, serverModified })
+let dropboxPerListMeta = {};
+// Metadatos del fichero de ajustes en modo per-list
+let dropboxSettingsMeta = { rev: null, serverModified: null };
 // Ventana global para evitar saturar el límite de escrituras de Dropbox
 let dropboxWriteAvailableAt = 0;
 
@@ -92,6 +103,8 @@ const waveformState = {
 };
 const waveformCache = new Map();
 let waveformResizeFrame = null;
+// Prefetch de siguiente pista remota
+let lastPrefetchForTrackId = null;
 
 const CROSS_FADE_MIN = 0.2;
 const TOKEN_REFRESH_MARGIN = 90 * 1000;
@@ -117,6 +130,7 @@ function createPlaylistObject(name, tracks = []) {
     id: generateId('pl'),
     name: name || 'Lista',
     tracks,
+    updatedAt: Date.now(),
   };
 }
 
@@ -257,6 +271,7 @@ function createPlaylist(name) {
   state.activePlaylistId = playlist.id;
   syncTracksFromActivePlaylist();
   state.currentIndex = -1;
+  playlist.updatedAt = Date.now();
   renderPlaylistPicker();
   renderPlaylist();
   updateControls();
@@ -273,6 +288,7 @@ function renameActivePlaylist() {
   const nextName = proposed.trim();
   if (!nextName || nextName === active.name) return;
   active.name = nextName;
+  active.updatedAt = Date.now();
   renderPlaylistPicker();
   persistLocalPlaylist();
   requestDropboxSync();
@@ -327,6 +343,7 @@ function serializeTrack(track) {
     name: track.name,
     fileName: track.fileName,
     duration: track.duration,
+    updatedAt: track.updatedAt ?? null,
     size: track.size ?? null,
     lastModified: track.lastModified ?? null,
     dropboxPath: track.dropboxPath ?? null,
@@ -344,6 +361,7 @@ function serializeTrackLocal(track) {
     name: track.name,
     fileName: track.fileName,
     duration: track.duration,
+    updatedAt: track.updatedAt ?? null,
     size: track.size ?? null,
     lastModified: track.lastModified ?? null,
     dropboxPath: track.dropboxPath ?? null,
@@ -361,6 +379,7 @@ function deserializeTrack(entry) {
     fileName: entry.fileName ?? entry.name,
     url: null,
     duration: entry.duration ?? null,
+    updatedAt: entry.updatedAt ?? null,
     size: entry.size ?? null,
     lastModified: entry.lastModified ?? null,
     dropboxPath: entry.dropboxPath ?? null,
@@ -554,7 +573,7 @@ function handleWaveformMetadata(player) {
 }
 
 function handleWaveformProgress(player) {
-  if (!waveformCanvas || waveformState.trackId !== player.trackId || !waveformState.peaks || !waveformState.peaks.length) {
+  if (!waveformCanvas || waveformState.trackId !== player.trackId) {
     return;
   }
   const duration = waveformState.duration || player.audio.duration;
@@ -562,11 +581,17 @@ function handleWaveformProgress(player) {
     return;
   }
   const progress = Math.min(1, Math.max(0, player.audio.currentTime / duration));
-  if (Math.abs(progress - waveformState.progress) < 0.003) {
-    return;
+  if (Math.abs(progress - waveformState.progress) >= 0.003) {
+    waveformState.progress = progress;
+    if (waveformState.peaks && waveformState.peaks.length) {
+      drawWaveform(waveformState.peaks, waveformState.progress);
+    }
   }
-  waveformState.progress = progress;
-  drawWaveform(waveformState.peaks, waveformState.progress);
+  // Prefetch del siguiente cuando llega al 50% de la pista
+  if (player.trackId && lastPrefetchForTrackId !== player.trackId && progress >= 0.5) {
+    lastPrefetchForTrackId = player.trackId;
+    maybePrefetchNext();
+  }
 }
 
 function prepareWaveformCanvas() {
@@ -652,6 +677,43 @@ function drawWaveform(peaks, progress = 0) {
     ctx.clip();
     drawShape(activeFill, false);
     ctx.restore();
+  }
+}
+
+function peekNextIndex() {
+  if (state.autoLoop && state.currentIndex !== -1) {
+    return state.currentIndex;
+  }
+  if (!state.shuffle) {
+    const next = state.currentIndex + 1;
+    return next < state.tracks.length ? next : -1;
+  }
+  // Aleatorio: miramos sin consumir la cola
+  ensureShuffleQueue();
+  if (shuffleQueue && shuffleQueue.length) {
+    return shuffleQueue[0];
+  }
+  // Si la cola está vacía, simulamos sin consumir
+  const simulated = buildShuffledIndices(state.currentIndex);
+  return simulated[0] ?? -1;
+}
+
+function maybePrefetchNext() {
+  try {
+    if (state.downloadOnPlayOnly) return;
+    const nextIdx = peekNextIndex();
+    if (nextIdx === -1) return;
+    const next = state.tracks[nextIdx];
+    if (!next || !next.dropboxPath) return;
+    if (next.url && next.url.startsWith('blob:')) return;
+    if (next._prefetching || next._prefetched) return;
+    next._prefetching = true;
+    ensureTrackRemoteLink(next)
+      .then(ok => { next._prefetched = !!ok; })
+      .catch(() => { /* noop */ })
+      .finally(() => { next._prefetching = false; });
+  } catch (e) {
+    // evitar que errores rompan el timeupdate
   }
 }
 
@@ -1206,6 +1268,7 @@ function addTracks(files) {
         duration: null,
         size: file.size,
         lastModified: file.lastModified,
+        updatedAt: Date.now(),
         dropboxPath: null,
         dropboxRev: null,
         dropboxSize: null,
@@ -1304,6 +1367,9 @@ function renameTrack(index) {
     return;
   }
   track.name = nextName;
+  track.updatedAt = Date.now();
+  const active = getActivePlaylist();
+  if (active) active.updatedAt = Date.now();
   renderPlaylist();
   updateNowPlaying();
   persistLocalPlaylist();
@@ -1316,6 +1382,8 @@ function reorderTracks(from, to) {
   }
   const [moved] = state.tracks.splice(from, 1);
   state.tracks.splice(to, 0, moved);
+  const active = getActivePlaylist();
+  if (active) active.updatedAt = Date.now();
   invalidateShuffle();
   if (state.currentIndex === from) {
     state.currentIndex = to;
@@ -1411,6 +1479,7 @@ async function playTrack(index, options = {}) {
   if (!track) {
     return;
   }
+  lastPrefetchForTrackId = null;
   // Marca para subir a Dropbox solo si se reproduce, si procede
   if (state.uploadOnPlayOnly && !track.dropboxPath) {
     track._shouldUpload = true;
@@ -1693,6 +1762,34 @@ function renderPlaylist() {
         meta.append(' ', status);
       }
     }
+    // Indicadores de estado (Dropbox, marcado para subir al reproducir, descarga diferida)
+    const flags = document.createElement('span');
+    flags.className = 'track-flags';
+    if (track.dropboxPath) {
+      const flag = document.createElement('span');
+      flag.className = 'track-flag';
+      flag.textContent = '☁︎';
+      flag.title = 'Guardado en Dropbox';
+      flags.append(flag);
+    }
+    if (state.uploadOnPlayOnly && !track.dropboxPath && track._shouldUpload) {
+      const flag = document.createElement('span');
+      flag.className = 'track-flag';
+      flag.textContent = '⏫';
+      flag.title = 'Se subirá a Dropbox al reproducir';
+      flags.append(flag);
+    }
+    if (state.downloadOnPlayOnly && (track.isRemote || track.dropboxPath) && !track._hasPlayed) {
+      const flag = document.createElement('span');
+      flag.className = 'track-flag';
+      flag.textContent = '⏬';
+      flag.title = 'Se descargará desde Dropbox al reproducir';
+      flags.append(flag);
+    }
+    if (flags.childElementCount > 0) {
+      flags.style.marginLeft = '0.5rem';
+      meta.append(' ', flags);
+    }
     title.append(name, meta);
 
     const actions = document.createElement('div');
@@ -1745,6 +1842,7 @@ function persistLocalPlaylist() {
     playlists: state.playlists.map(playlist => ({
       id: playlist.id,
       name: playlist.name,
+      updatedAt: playlist.updatedAt ?? null,
       tracks: playlist.tracks.map(serializeTrackLocal),
     })),
     activePlaylistId: state.activePlaylistId,
@@ -1753,6 +1851,10 @@ function persistLocalPlaylist() {
     shuffle: state.shuffle,
     uploadOnPlayOnly: state.uploadOnPlayOnly,
     downloadOnPlayOnly: state.downloadOnPlayOnly,
+    playlistRev: dropboxPlaylistMeta.rev || null,
+    playlistServerModified: dropboxPlaylistMeta.serverModified || null,
+    perListMeta: dropboxPerListMeta,
+    settingsMeta: dropboxSettingsMeta,
     pendingDeletions: Array.from(pendingDeletions),
     updatedAt: Date.now(),
   };
@@ -1810,6 +1912,7 @@ function loadLocalPlaylist() {
       state.playlists = data.playlists.map(playlist => ({
         id: playlist.id || generateId('pl'),
         name: playlist.name || 'Lista',
+        updatedAt: playlist.updatedAt ?? null,
         tracks: Array.isArray(playlist.tracks) ? playlist.tracks.map(deserializeTrack) : [],
       }));
       if (data.activePlaylistId && state.playlists.some(pl => pl.id === data.activePlaylistId)) {
@@ -1821,6 +1924,16 @@ function loadLocalPlaylist() {
       state.activePlaylistId = fallback.id;
     }
     ensurePlaylistsInitialized();
+    if (data?.playlistRev || data?.playlistServerModified) {
+      dropboxPlaylistMeta.rev = data.playlistRev || null;
+      dropboxPlaylistMeta.serverModified = data.playlistServerModified || null;
+    }
+    if (data?.perListMeta && typeof data.perListMeta === 'object') {
+      dropboxPerListMeta = data.perListMeta;
+    }
+    if (data?.settingsMeta && typeof data.settingsMeta === 'object') {
+      dropboxSettingsMeta = data.settingsMeta;
+    }
   } catch (error) {
     console.warn('No se pudo leer la lista local', error);
     ensurePlaylistsInitialized();
@@ -2060,12 +2173,23 @@ async function performDropboxSync(options = {}) {
     if (!token) {
       return;
     }
+    const perListAvailable = await isPerListModeAvailable(token);
     if (effective.loadRemote) {
-      await pullDropboxPlaylist(token);
+      if (perListAvailable) {
+        await pullDropboxPlaylistsPerList(token);
+        await pullDropboxSettings(token).catch(() => {});
+      } else {
+        await pullDropboxPlaylist(token);
+      }
     }
     await uploadPendingTracks(token, candidates);
     await processPendingDeletions(token);
-    await saveDropboxPlaylist(token);
+    if (perListAvailable) {
+      await saveDropboxPlaylistsPerList(token);
+      await saveDropboxSettings(token).catch(() => {});
+    } else {
+      await saveDropboxPlaylist(token);
+    }
     dropboxState.lastSync = Date.now();
   } catch (error) {
     console.error('Dropbox sync error', error);
@@ -2155,35 +2279,132 @@ async function uploadOneTrackWithRetry(token, track) {
   while (attempt <= maxRetries) {
     try {
       await awaitDropboxWriteWindow();
-      const response = await fetch('https://content.dropboxapi.com/2/files/upload', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/octet-stream',
-          'Dropbox-API-Arg': JSON.stringify({
-            path: remotePath,
-            mode: 'overwrite',
-            mute: false,
-            autorename: false,
-          }),
-        },
-        body: file,
-      });
+      const CHUNK_THRESHOLD = 8 * 1024 * 1024; // 8 MB
+      const useSession = (file.size || 0) > CHUNK_THRESHOLD;
+      let metadata = null;
+      if (!useSession) {
+        const response = await fetch('https://content.dropboxapi.com/2/files/upload', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/octet-stream',
+            'Dropbox-API-Arg': JSON.stringify({
+              path: remotePath,
+              mode: 'overwrite',
+              mute: false,
+              autorename: false,
+            }),
+          },
+          body: file,
+        });
 
-      if (!response.ok) {
-        const textResponse = await response.text();
-        const retrySeconds = parseDropboxRetryInfo(response.status, response.headers, textResponse);
-        if (retrySeconds && attempt < maxRetries) {
-          dropboxWriteAvailableAt = Date.now() + retrySeconds * 1000;
-          const jitter = Math.random() * 250;
-          await sleep(retrySeconds * 1000 + jitter);
-          attempt += 1;
-          continue;
+        if (!response.ok) {
+          const textResponse = await response.text();
+          const retrySeconds = parseDropboxRetryInfo(response.status, response.headers, textResponse);
+          if (retrySeconds && attempt < maxRetries) {
+            dropboxWriteAvailableAt = Date.now() + retrySeconds * 1000;
+            const jitter = Math.random() * 250;
+            await sleep(retrySeconds * 1000 + jitter);
+            attempt += 1;
+            continue;
+          }
+          throw new Error(textResponse || 'Upload failed');
         }
-        throw new Error(textResponse || 'Upload failed');
+
+        metadata = await response.json();
+      } else {
+        // Resumable upload via upload_session
+        const CHUNK_SIZE = 8 * 1024 * 1024; // 8 MB
+        const total = file.size || 0;
+        let offset = 0;
+        const firstChunk = file.slice(0, Math.min(CHUNK_SIZE, total));
+        let resp = await fetch('https://content.dropboxapi.com/2/files/upload_session/start', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/octet-stream',
+            'Dropbox-API-Arg': JSON.stringify({ close: false }),
+          },
+          body: firstChunk,
+        });
+        if (!resp.ok) {
+          const text = await resp.text();
+          const retrySeconds = parseDropboxRetryInfo(resp.status, resp.headers, text);
+          if (retrySeconds && attempt < maxRetries) {
+            dropboxWriteAvailableAt = Date.now() + retrySeconds * 1000;
+            await sleep(retrySeconds * 1000 + Math.random() * 300);
+            attempt += 1;
+            continue;
+          }
+          throw new Error(text || 'upload_session/start failed');
+        }
+        const startInfo = await resp.json();
+        const sessionId = startInfo.session_id;
+        offset = firstChunk.size;
+        while (offset + CHUNK_SIZE < total) {
+          const chunk = file.slice(offset, offset + CHUNK_SIZE);
+          resp = await fetch('https://content.dropboxapi.com/2/files/upload_session/append_v2', {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${token}`,
+              'Content-Type': 'application/octet-stream',
+              'Dropbox-API-Arg': JSON.stringify({
+                cursor: { session_id: sessionId, offset },
+                close: false,
+              }),
+            },
+            body: chunk,
+          });
+          if (!resp.ok) {
+            const text = await resp.text();
+            const retrySeconds = parseDropboxRetryInfo(resp.status, resp.headers, text);
+            if (retrySeconds && attempt < maxRetries) {
+              dropboxWriteAvailableAt = Date.now() + retrySeconds * 1000;
+              await sleep(retrySeconds * 1000 + Math.random() * 300);
+              attempt += 1;
+              // reiniciar todo el intento para simplificar
+              continue;
+            }
+            throw new Error(text || 'upload_session/append_v2 failed');
+          }
+          offset += chunk.size;
+        }
+        const lastChunk = file.slice(offset, total);
+        resp = await fetch('https://content.dropboxapi.com/2/files/upload_session/finish', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/octet-stream',
+            'Dropbox-API-Arg': JSON.stringify({
+              cursor: { session_id: sessionId, offset },
+              commit: { path: remotePath, mode: 'overwrite', autorename: false, mute: false },
+            }),
+          },
+          body: lastChunk,
+        });
+        if (!resp.ok) {
+          const text = await resp.text();
+          const retrySeconds = parseDropboxRetryInfo(resp.status, resp.headers, text);
+          if (retrySeconds && attempt < maxRetries) {
+            dropboxWriteAvailableAt = Date.now() + retrySeconds * 1000;
+            await sleep(retrySeconds * 1000 + Math.random() * 300);
+            attempt += 1;
+            continue;
+          }
+          throw new Error(text || 'upload_session/finish failed');
+        }
+        metadata = await resp.json();
       }
 
-      const metadata = await response.json();
+      track.dropboxPath = metadata.path_lower ?? metadata.path_display ?? remotePath;
+      track.dropboxRev = metadata.rev;
+      track.dropboxSize = metadata.size;
+      track.dropboxUpdatedAt = Date.now();
+      track.isRemote = true;
+      track.urlExpiresAt = 0;
+      pendingUploads.delete(track.id);
+      persistLocalPlaylist();
+      return;
       track.dropboxPath = metadata.path_lower ?? metadata.path_display ?? remotePath;
       track.dropboxRev = metadata.rev;
       track.dropboxSize = metadata.size;
@@ -2253,6 +2474,7 @@ async function saveDropboxPlaylist(token) {
     playlists: state.playlists.map(playlist => ({
       id: playlist.id,
       name: playlist.name,
+      updatedAt: playlist.updatedAt ?? null,
       tracks: playlist.tracks.map(serializeTrack),
     })),
   };
@@ -2262,6 +2484,7 @@ async function saveDropboxPlaylist(token) {
   while (attempt <= maxRetries) {
     try {
       await awaitDropboxWriteWindow();
+      const modeArg = dropboxPlaylistMeta?.rev ? { ".tag": "update", update: dropboxPlaylistMeta.rev } : 'overwrite';
       const response = await fetch('https://content.dropboxapi.com/2/files/upload', {
         method: 'POST',
         headers: {
@@ -2269,7 +2492,7 @@ async function saveDropboxPlaylist(token) {
           'Content-Type': 'application/octet-stream',
           'Dropbox-API-Arg': JSON.stringify({
             path: dropboxConfig.playlistPath,
-            mode: 'overwrite',
+            mode: modeArg,
             autorename: false,
             mute: true,
           }),
@@ -2278,6 +2501,29 @@ async function saveDropboxPlaylist(token) {
       });
       if (!response.ok) {
         const text = await response.text();
+        if (response.status === 409 && dropboxPlaylistMeta?.rev) {
+          // Conflicto de versión: resolver
+          const remote = await pullDropboxPlaylistRaw(token).catch(() => null);
+          const wantMerge = window.confirm('Conflicto de cambios en la nube. ¿Combinar cambios locales y remotos?\nAceptar: combinar.\nCancelar: elegir versión.');
+          if (wantMerge && remote) {
+            const merged = mergePlaylistDocuments(payload, remote.doc);
+            // Reintenta guardando el merge contra la última rev
+            dropboxPlaylistMeta.rev = remote.meta.rev || null;
+            return await saveDropboxPlaylistWithPayload(token, merged, dropboxPlaylistMeta.rev);
+          } else if (remote) {
+            const useCloud = window.confirm('¿Usar la versión de la nube y descartar cambios locales?');
+            if (useCloud) {
+              applyRemoteDocumentToState(remote.doc);
+              persistLocalPlaylist();
+              return; // no guardar local por ahora
+            } else {
+              // Forzar sobrescritura
+              dropboxPlaylistMeta.rev = null;
+              attempt += 1;
+              continue;
+            }
+          }
+        }
         const retrySeconds = parseDropboxRetryInfo(response.status, response.headers, text);
         if (retrySeconds && attempt < maxRetries) {
           dropboxWriteAvailableAt = Date.now() + retrySeconds * 1000;
@@ -2287,6 +2533,10 @@ async function saveDropboxPlaylist(token) {
         }
         throw new Error(text || 'Upload failed');
       }
+      const meta = await response.json();
+      dropboxPlaylistMeta.rev = meta.rev || dropboxPlaylistMeta.rev || null;
+      dropboxPlaylistMeta.serverModified = meta.server_modified || dropboxPlaylistMeta.serverModified || null;
+      persistLocalPlaylist();
       return; // success
     } catch (error) {
       if (attempt >= maxRetries) {
@@ -2297,6 +2547,33 @@ async function saveDropboxPlaylist(token) {
       attempt += 1;
     }
   }
+}
+
+// Guardar con un payload ya preparado (usado tras un merge)
+async function saveDropboxPlaylistWithPayload(token, payload, rev) {
+  const body = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const response = await fetch('https://content.dropboxapi.com/2/files/upload', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/octet-stream',
+      'Dropbox-API-Arg': JSON.stringify({
+        path: dropboxConfig.playlistPath,
+        mode: rev ? { ".tag": "update", update: rev } : 'overwrite',
+        autorename: false,
+        mute: true,
+      }),
+    },
+    body,
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || 'Upload failed');
+  }
+  const meta = await response.json();
+  dropboxPlaylistMeta.rev = meta.rev || null;
+  dropboxPlaylistMeta.serverModified = meta.server_modified || null;
+  persistLocalPlaylist();
 }
 
 async function pullDropboxPlaylist(token) {
@@ -2315,6 +2592,15 @@ async function pullDropboxPlaylist(token) {
     if (!response.ok) {
       const text = await response.text();
       throw new Error(text || 'Unable to download playlist');
+    }
+    // Capturar metadata de cabecera para control de versión
+    const metaHeader = response.headers.get('dropbox-api-result');
+    if (metaHeader) {
+      try {
+        const m = JSON.parse(metaHeader);
+        dropboxPlaylistMeta.rev = m?.rev || dropboxPlaylistMeta.rev || null;
+        dropboxPlaylistMeta.serverModified = m?.server_modified || dropboxPlaylistMeta.serverModified || null;
+      } catch {}
     }
     const json = await response.json();
     if (Array.isArray(json?.playlists)) {
@@ -2492,26 +2778,172 @@ async function pullDropboxPlaylist(token) {
   }
 }
 
+// Variante raw para obtener doc + meta sin tocar el estado
+async function pullDropboxPlaylistRaw(token) {
+  const response = await fetch('https://content.dropboxapi.com/2/files/download', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Dropbox-API-Arg': JSON.stringify({ path: dropboxConfig.playlistPath }),
+    },
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    throw new Error(text || 'Unable to download playlist');
+  }
+  const metaHeader = response.headers.get('dropbox-api-result');
+  const meta = { rev: null, server_modified: null };
+  if (metaHeader) {
+    try {
+      const m = JSON.parse(metaHeader);
+      meta.rev = m?.rev || null;
+      meta.server_modified = m?.server_modified || null;
+    } catch {}
+  }
+  const doc = await response.json();
+  return { doc, meta };
+}
+
+function applyRemoteDocumentToState(json) {
+  if (Array.isArray(json?.playlists)) {
+    const localTrackMap = new Map();
+    const localPlaylistMeta = new Map();
+    state.playlists.forEach(playlist => {
+      localPlaylistMeta.set(playlist.id, { name: playlist.name, updatedAt: playlist.updatedAt });
+      playlist.tracks.forEach(track => {
+        localTrackMap.set(track.id, { track, playlistId: playlist.id });
+      });
+    });
+    const nextPlaylists = [];
+    json.playlists.forEach(remotePlaylist => {
+      const playlistId = remotePlaylist.id || generateId('pl');
+      const playlist = {
+        id: playlistId,
+        name: remotePlaylist.name || 'Lista',
+        updatedAt: remotePlaylist.updatedAt ?? Date.now(),
+        tracks: [],
+      };
+      localPlaylistMeta.delete(playlistId);
+      if (Array.isArray(remotePlaylist.tracks)) {
+        remotePlaylist.tracks.forEach(entry => {
+          if (!entry?.id) return;
+          const existingInfo = localTrackMap.get(entry.id);
+          let track = existingInfo ? existingInfo.track : deserializeTrack(entry);
+          track.name = entry.name || track.name;
+          track.fileName = entry.fileName ?? track.fileName ?? track.name;
+          if (Number.isFinite(entry.duration)) track.duration = entry.duration;
+          if (entry.dropboxPath) {
+            track.dropboxPath = entry.dropboxPath;
+            track.dropboxRev = entry.dropboxRev ?? track.dropboxRev ?? null;
+            track.dropboxSize = entry.dropboxSize ?? track.dropboxSize ?? null;
+            track.dropboxUpdatedAt = entry.dropboxUpdatedAt ?? track.dropboxUpdatedAt ?? null;
+            track.isRemote = true;
+          }
+          track.url = null;
+          track.urlExpiresAt = 0;
+          if (entry.waveform?.peaks?.length) track.waveform = entry.waveform;
+          track.updatedAt = entry.updatedAt ?? track.updatedAt ?? null;
+          playlist.tracks.push(track);
+        });
+      }
+      nextPlaylists.push(playlist);
+    });
+    state.playlists = nextPlaylists;
+    if (json.activePlaylistId && state.playlists.some(pl => pl.id === json.activePlaylistId)) {
+      state.activePlaylistId = json.activePlaylistId;
+    }
+    if (Number.isFinite(json.fadeDuration)) {
+      state.fadeDuration = json.fadeDuration;
+      if (fadeSlider) fadeSlider.value = String(json.fadeDuration);
+    }
+    if (typeof json.autoLoop === 'boolean') {
+      state.autoLoop = json.autoLoop;
+      if (loopToggle) loopToggle.checked = state.autoLoop;
+    }
+    if (typeof json.shuffle === 'boolean') state.shuffle = json.shuffle;
+    if (typeof json.uploadOnPlayOnly === 'boolean') state.uploadOnPlayOnly = json.uploadOnPlayOnly;
+    if (typeof json.downloadOnPlayOnly === 'boolean') state.downloadOnPlayOnly = json.downloadOnPlayOnly;
+    ensurePlaylistsInitialized();
+    fadeValue.textContent = `${state.fadeDuration.toFixed(1).replace(/\.0$/, '')} s`;
+    persistLocalPlaylist();
+    renderPlaylist();
+    updateControls();
+  }
+}
+
+function mergePlaylistDocuments(localDoc, remoteDoc) {
+  const result = {
+    version: 2,
+    updatedAt: Date.now(),
+    activePlaylistId: localDoc.activePlaylistId || remoteDoc.activePlaylistId || null,
+    fadeDuration: localDoc.fadeDuration ?? remoteDoc.fadeDuration ?? 3,
+    autoLoop: typeof localDoc.autoLoop === 'boolean' ? localDoc.autoLoop : (remoteDoc.autoLoop ?? false),
+    shuffle: typeof localDoc.shuffle === 'boolean' ? localDoc.shuffle : (remoteDoc.shuffle ?? false),
+    uploadOnPlayOnly: typeof localDoc.uploadOnPlayOnly === 'boolean' ? localDoc.uploadOnPlayOnly : (remoteDoc.uploadOnPlayOnly ?? false),
+    downloadOnPlayOnly: typeof localDoc.downloadOnPlayOnly === 'boolean' ? localDoc.downloadOnPlayOnly : (remoteDoc.downloadOnPlayOnly ?? false),
+    playlists: [],
+  };
+  const mapRemote = new Map((remoteDoc.playlists || []).map(p => [p.id, p]));
+  const mapLocal = new Map((localDoc.playlists || []).map(p => [p.id, p]));
+  const ids = new Set([...mapRemote.keys(), ...mapLocal.keys()]);
+  ids.forEach(id => {
+    const L = mapLocal.get(id);
+    const R = mapRemote.get(id);
+    if (!L && R) {
+      result.playlists.push(R);
+    } else if (L && !R) {
+      result.playlists.push(L);
+    } else if (L && R) {
+      const chosenName = (L.updatedAt ?? 0) >= (R.updatedAt ?? 0) ? L.name : R.name;
+      const merged = { id, name: chosenName, updatedAt: Math.max(L.updatedAt ?? 0, R.updatedAt ?? 0), tracks: [] };
+      const rTracks = new Map((R.tracks || []).map(t => [t.id, t]));
+      const lTracks = new Map((L.tracks || []).map(t => [t.id, t]));
+      const tids = new Set([...rTracks.keys(), ...lTracks.keys()]);
+      tids.forEach(tid => {
+        const lt = lTracks.get(tid);
+        const rt = rTracks.get(tid);
+        if (lt && !rt) merged.tracks.push(lt);
+        else if (!lt && rt) merged.tracks.push(rt);
+        else if (lt && rt) {
+          const pickLocal = (lt.updatedAt ?? 0) >= (rt.updatedAt ?? 0);
+          const base = pickLocal ? lt : rt;
+          const other = pickLocal ? rt : lt;
+          // Combinar algunos campos si faltan
+          const combined = {
+            ...other,
+            ...base,
+          };
+          merged.tracks.push(combined);
+        }
+      });
+      result.playlists.push(merged);
+    }
+  });
+  return result;
+}
+
 async function processPendingDeletions(token) {
   if (!pendingDeletions.size) {
     return;
   }
   const deletions = Array.from(pendingDeletions);
-  for (const path of deletions) {
+  const CHUNK = 900; // margen bajo límite
+  for (let start = 0; start < deletions.length; start += CHUNK) {
+    const slice = deletions.slice(start, start + CHUNK).map(path => ({ path }));
     let attempt = 0;
     const maxRetries = 5;
     while (attempt <= maxRetries) {
       try {
         await awaitDropboxWriteWindow();
-        const response = await fetch('https://api.dropboxapi.com/2/files/delete_v2', {
+        const response = await fetch('https://api.dropboxapi.com/2/files/delete_batch', {
           method: 'POST',
           headers: {
             Authorization: `Bearer ${token}`,
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify({ path }),
+          body: JSON.stringify({ entries: slice }),
         });
-        if (!response.ok && response.status !== 409) {
+        if (!response.ok) {
           const text = await response.text().catch(() => '');
           const retrySeconds = parseDropboxRetryInfo(response.status, response.headers, text);
           if (retrySeconds && attempt < maxRetries) {
@@ -2520,13 +2952,62 @@ async function processPendingDeletions(token) {
             attempt += 1;
             continue;
           }
-          throw new Error('Delete failed');
+          throw new Error('delete_batch failed');
         }
-        pendingDeletions.delete(path);
+        const resJson = await response.json();
+        let asyncJobId = resJson?.async_job_id || null;
+        if (!asyncJobId && Array.isArray(resJson?.entries)) {
+          // respuesta síncrona poco común; procesa entradas
+          resJson.entries.forEach(e => {
+            if (e['.tag'] === 'success' && e?.metadata?.path_lower) {
+              pendingDeletions.delete(e.metadata.path_lower);
+            }
+          });
+          break;
+        }
+        // poll hasta completar
+        while (asyncJobId) {
+          await sleep(600);
+          const check = await fetch('https://api.dropboxapi.com/2/files/delete_batch/check', {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${token}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ async_job_id: asyncJobId }),
+          });
+          if (!check.ok) {
+            const text = await check.text().catch(() => '');
+            const retrySeconds2 = parseDropboxRetryInfo(check.status, check.headers, text);
+            if (retrySeconds2 && attempt < maxRetries) {
+              dropboxWriteAvailableAt = Date.now() + retrySeconds2 * 1000;
+              await sleep(retrySeconds2 * 1000 + Math.random() * 250);
+              attempt += 1;
+              continue;
+            }
+            throw new Error('delete_batch/check failed');
+          }
+          const status = await check.json();
+          if (status['.tag'] === 'in_progress') {
+            continue;
+          }
+          if (status['.tag'] === 'complete' && Array.isArray(status.entries)) {
+            status.entries.forEach(e => {
+              if (e['.tag'] === 'success' && e?.metadata?.path_lower) {
+                pendingDeletions.delete(e.metadata.path_lower);
+              } else if (e['.tag'] === 'failure' && e?.failure?.['.tag'] === 'path_lookup') {
+                // no existe; dejar de marcarlo
+                const p = e?.failure?.path_lookup?.['.tag'] === 'not_found' ? e?.failure?.path_lookup?.path : null;
+                if (p) pendingDeletions.delete(p);
+              }
+            });
+          }
+          asyncJobId = null;
+        }
         break;
       } catch (error) {
         if (attempt >= maxRetries) {
-          console.error('No se pudo eliminar archivo en Dropbox', error);
+          console.error('No se pudo eliminar archivos en lote en Dropbox', error);
           break;
         }
         await sleep(Math.min(16000, 1000 * Math.pow(2, attempt)) + Math.random() * 300);
@@ -2538,6 +3019,15 @@ async function processPendingDeletions(token) {
 }
 
 function disconnectDropbox() {
+  try {
+    const token = dropboxAuth?.accessToken;
+    if (token) {
+      fetch('https://api.dropboxapi.com/2/auth/token/revoke', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      }).catch(() => {});
+    }
+  } catch {}
   saveDropboxAuth(null);
   dropboxState.error = null;
   dropboxState.isSyncing = false;
@@ -2571,6 +3061,17 @@ function base64UrlEncode(buffer) {
     .replace(/=+$/g, '');
 }
 
+function sanitizeFileName(name) {
+  const base = (name || 'Lista').toString().trim().slice(0, 100).replace(/\.[a-z0-9]+$/i, '');
+  const safe = base.replace(/[^a-zA-Z0-9._-]+/g, '_').replace(/_+/g, '_').replace(/^_+|_+$/g, '') || 'Lista';
+  return `${safe}.json`;
+}
+
+function getPlaylistPath(playlist) {
+  const file = sanitizeFileName(playlist.name || 'Lista');
+  return `${dropboxConfig.playlistsDir}/${file}`;
+}
+
 async function initialize() {
   loadLocalPlaylist();
   await restoreLocalMedia();
@@ -2588,3 +3089,242 @@ async function initialize() {
 handleDropboxRedirect().catch(console.error).finally(() => {
   initialize().catch(console.error);
 });
+
+// ============ Per-list Dropbox support ============
+async function isPerListModeAvailable(token) {
+  try {
+    const response = await fetch('https://api.dropboxapi.com/2/files/list_folder', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ path: dropboxConfig.playlistsDir, recursive: false, limit: 2 }),
+    });
+    if (response.status === 409) {
+      return false;
+    }
+    if (!response.ok) {
+      return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function ensurePlaylistsFolder(token) {
+  try {
+    const response = await fetch('https://api.dropboxapi.com/2/files/create_folder_v2', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ path: dropboxConfig.playlistsDir, autorename: false }),
+    });
+    if (response.ok) return true;
+    if (response.status === 409) return true; // ya existe
+  } catch {}
+  return false;
+}
+
+async function pullDropboxPlaylistsPerList(token) {
+  try {
+    const response = await fetch('https://api.dropboxapi.com/2/files/list_folder', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ path: dropboxConfig.playlistsDir, recursive: false }),
+    });
+    if (response.status === 409) {
+      // No existe la carpeta
+      return;
+    }
+    if (!response.ok) {
+      const txt = await response.text().catch(() => '');
+      throw new Error(txt || 'list_folder failed');
+    }
+    const listing = await response.json();
+    const entries = Array.isArray(listing?.entries) ? listing.entries : [];
+    const jsonFiles = entries.filter(e => e['.tag'] === 'file' && typeof e?.path_lower === 'string' && e.name.toLowerCase().endsWith('.json') && e.name !== '_settings.json');
+    const downloaded = [];
+    for (const file of jsonFiles) {
+      const path = file.path_lower || file.path_display;
+      const resp = await fetch('https://content.dropboxapi.com/2/files/download', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Dropbox-API-Arg': JSON.stringify({ path }) },
+      });
+      if (!resp.ok) continue;
+      const metaHeader = resp.headers.get('dropbox-api-result');
+      let meta = {};
+      try { meta = JSON.parse(metaHeader || '{}'); } catch {}
+      const doc = await resp.json().catch(() => null);
+      if (doc && doc.id) {
+        downloaded.push({ path, meta, doc });
+      }
+    }
+    if (!downloaded.length) return;
+    const mapLocalTracks = new Map();
+    const mapLocalPlaylistMeta = new Map();
+    state.playlists.forEach(pl => {
+      mapLocalPlaylistMeta.set(pl.id, { name: pl.name, updatedAt: pl.updatedAt });
+      pl.tracks.forEach(t => mapLocalTracks.set(t.id, { track: t, playlistId: pl.id }));
+    });
+    const nextPlaylists = [];
+    downloaded.forEach(({ path, meta, doc }) => {
+      const id = doc.id || generateId('pl');
+      const playlist = { id, name: doc.name || 'Lista', updatedAt: doc.updatedAt ?? Date.now(), tracks: [] };
+      dropboxPerListMeta[id] = { path, rev: meta?.rev || null, serverModified: meta?.server_modified || null };
+      if (Array.isArray(doc.tracks)) {
+        doc.tracks.forEach(entry => {
+          if (!entry?.id) return;
+          const existing = mapLocalTracks.get(entry.id)?.track;
+          const track = existing ? existing : deserializeTrack(entry);
+          track.name = entry.name || track.name;
+          track.fileName = entry.fileName ?? track.fileName ?? track.name;
+          if (Number.isFinite(entry.duration)) track.duration = entry.duration;
+          if (entry.dropboxPath) {
+            track.dropboxPath = entry.dropboxPath;
+            track.dropboxRev = entry.dropboxRev ?? track.dropboxRev ?? null;
+            track.dropboxSize = entry.dropboxSize ?? track.dropboxSize ?? null;
+            track.dropboxUpdatedAt = entry.dropboxUpdatedAt ?? track.dropboxUpdatedAt ?? null;
+            track.isRemote = true;
+          }
+          track.url = null;
+          track.urlExpiresAt = 0;
+          if (entry.waveform?.peaks?.length) track.waveform = entry.waveform;
+          track.updatedAt = entry.updatedAt ?? track.updatedAt ?? null;
+          playlist.tracks.push(track);
+        });
+      }
+      nextPlaylists.push(playlist);
+    });
+    // Incorporar listas locales que no están en remoto
+    mapLocalPlaylistMeta.forEach((meta, pid) => {
+      if (!nextPlaylists.some(p => p.id === pid)) {
+        const pl = state.playlists.find(p => p.id === pid);
+        if (pl) nextPlaylists.push(pl);
+      }
+    });
+    state.playlists = nextPlaylists;
+    ensurePlaylistsInitialized();
+    persistLocalPlaylist();
+    renderPlaylistPicker();
+    renderPlaylist();
+    updateControls();
+  } catch (e) {
+    console.error('Error pull per-list', e);
+    throw e;
+  }
+}
+
+async function saveDropboxPlaylistsPerList(token) {
+  await ensurePlaylistsFolder(token);
+  for (const pl of state.playlists) {
+    const payload = {
+      version: 2,
+      id: pl.id,
+      name: pl.name,
+      updatedAt: pl.updatedAt ?? Date.now(),
+      tracks: pl.tracks.map(serializeTrack),
+    };
+    const body = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const desiredPath = getPlaylistPath(pl);
+    const meta = dropboxPerListMeta[pl.id] || { path: desiredPath, rev: null };
+    const pathChanged = meta.path && meta.path !== desiredPath;
+    let attempt = 0;
+    const maxRetries = 5;
+    while (attempt <= maxRetries) {
+      try {
+        await awaitDropboxWriteWindow();
+        const response = await fetch('https://content.dropboxapi.com/2/files/upload', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/octet-stream',
+            'Dropbox-API-Arg': JSON.stringify({
+              path: desiredPath,
+              mode: meta.rev ? { '.tag': 'update', update: meta.rev } : 'overwrite',
+              autorename: false,
+              mute: true,
+            }),
+          },
+          body,
+        });
+        if (!response.ok) {
+          const text = await response.text();
+          const retrySeconds = parseDropboxRetryInfo(response.status, response.headers, text);
+          if (retrySeconds && attempt < maxRetries) {
+            dropboxWriteAvailableAt = Date.now() + retrySeconds * 1000;
+            await sleep(retrySeconds * 1000 + Math.random() * 250);
+            attempt += 1;
+            continue;
+          }
+          throw new Error(text || 'Upload failed');
+        }
+        const metaJson = await response.json();
+        dropboxPerListMeta[pl.id] = { path: desiredPath, rev: metaJson.rev || null, serverModified: metaJson.server_modified || null };
+        if (pathChanged && meta.path) {
+          pendingDeletions.add(meta.path);
+        }
+        break;
+      } catch (err) {
+        if (attempt >= maxRetries) throw err;
+        await sleep(Math.min(16000, 1000 * Math.pow(2, attempt)) + Math.random() * 300);
+        attempt += 1;
+      }
+    }
+  }
+  persistLocalPlaylist();
+}
+
+async function saveDropboxSettings(token) {
+  const payload = {
+    version: 1,
+    updatedAt: Date.now(),
+    activePlaylistId: state.activePlaylistId,
+    fadeDuration: state.fadeDuration,
+    autoLoop: state.autoLoop,
+    shuffle: state.shuffle,
+    uploadOnPlayOnly: state.uploadOnPlayOnly,
+    downloadOnPlayOnly: state.downloadOnPlayOnly,
+  };
+  const body = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const response = await fetch('https://content.dropboxapi.com/2/files/upload', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/octet-stream',
+      'Dropbox-API-Arg': JSON.stringify({
+        path: dropboxConfig.settingsPath,
+        mode: dropboxSettingsMeta?.rev ? { '.tag': 'update', update: dropboxSettingsMeta.rev } : 'overwrite',
+        autorename: false,
+        mute: true,
+      }),
+    },
+    body,
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    throw new Error(text || 'Upload settings failed');
+  }
+  const meta = await response.json();
+  dropboxSettingsMeta.rev = meta.rev || null;
+  dropboxSettingsMeta.serverModified = meta.server_modified || null;
+  persistLocalPlaylist();
+}
+
+async function pullDropboxSettings(token) {
+  const response = await fetch('https://content.dropboxapi.com/2/files/download', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Dropbox-API-Arg': JSON.stringify({ path: dropboxConfig.settingsPath }) },
+  });
+  if (!response.ok) return;
+  const metaHeader = response.headers.get('dropbox-api-result');
+  if (metaHeader) {
+    try { const m = JSON.parse(metaHeader); dropboxSettingsMeta.rev = m?.rev || null; dropboxSettingsMeta.serverModified = m?.server_modified || null; } catch {}
+  }
+  const json = await response.json().catch(() => null);
+  if (!json) return;
+  if (json.activePlaylistId && state.playlists.some(pl => pl.id === json.activePlaylistId)) state.activePlaylistId = json.activePlaylistId;
+  if (Number.isFinite(json.fadeDuration)) { state.fadeDuration = json.fadeDuration; if (fadeSlider) fadeSlider.value = String(json.fadeDuration); fadeValue.textContent = `${state.fadeDuration.toFixed(1).replace(/\.0$/, '')} s`; }
+  if (typeof json.autoLoop === 'boolean') { state.autoLoop = json.autoLoop; if (loopToggle) loopToggle.checked = state.autoLoop; }
+  if (typeof json.shuffle === 'boolean') state.shuffle = json.shuffle;
+  if (typeof json.uploadOnPlayOnly === 'boolean') { state.uploadOnPlayOnly = json.uploadOnPlayOnly; if (uploadOnPlayOnlyToggle) uploadOnPlayOnlyToggle.checked = state.uploadOnPlayOnly; }
+  if (typeof json.downloadOnPlayOnly === 'boolean') { state.downloadOnPlayOnly = json.downloadOnPlayOnly; if (downloadOnPlayOnlyToggle) downloadOnPlayOnlyToggle.checked = state.downloadOnPlayOnly; }
+  persistLocalPlaylist();
+}
