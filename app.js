@@ -28,6 +28,8 @@ const waveformCanvas = document.getElementById('waveformCanvas');
 const waveformMessage = document.getElementById('waveformMessage');
 const waveformContainer = document.querySelector('.waveform');
 const coverArtImg = document.getElementById('coverArt');
+const localUsageEl = document.getElementById('localUsage');
+const dropboxUsageEl = document.getElementById('dropboxUsage');
 
 const STORAGE_KEYS = {
   playlist: 'edumix-playlist',
@@ -108,6 +110,7 @@ const waveformCache = new Map();
 let waveformResizeFrame = null;
 // Prefetch de siguiente pista remota
 let lastPrefetchForTrackId = null;
+let storageStatsTimer = null;
 
 const CROSS_FADE_MIN = 0.2;
 const TOKEN_REFRESH_MARGIN = 90 * 1000;
@@ -261,6 +264,7 @@ function setActivePlaylist(id) {
   renderPlaylistPicker();
   persistLocalPlaylist();
   requestDropboxSync();
+  scheduleStorageStatsUpdate();
 }
 
 function createPlaylist(name) {
@@ -1004,6 +1008,7 @@ filePicker?.addEventListener('change', event => {
   }
   addTracks(files);
   filePicker.value = '';
+  scheduleStorageStatsUpdate();
 });
 
 clearPlaylistBtn?.addEventListener('click', () => {
@@ -1030,6 +1035,7 @@ clearPlaylistBtn?.addEventListener('click', () => {
   updateControls();
   persistLocalPlaylist();
   requestDropboxSync();
+  scheduleStorageStatsUpdate();
 });
 
 playlistPicker?.addEventListener('change', event => {
@@ -1367,6 +1373,7 @@ function removeTrack(index) {
   updateControls();
   persistLocalPlaylist();
   requestDropboxSync();
+  scheduleStorageStatsUpdate();
 }
 
 function renameTrack(index) {
@@ -2524,6 +2531,7 @@ async function uploadPendingTracks(token, list) {
   };
   const workers = Array.from({ length: Math.min(CONCURRENCY, candidates.length) }, () => worker());
   await Promise.all(workers);
+  scheduleStorageStatsUpdate();
 }
 
 async function saveDropboxPlaylist(token) {
@@ -3081,6 +3089,7 @@ async function processPendingDeletions(token) {
     }
   }
   persistLocalPlaylist();
+  scheduleStorageStatsUpdate();
 }
 
 function disconnectDropbox() {
@@ -3278,6 +3287,54 @@ function updateCoverArtDisplay(track) {
   coverArtImg.hidden = false;
 }
 
+function formatBytes(n) {
+  if (!Number.isFinite(n) || n <= 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.min(units.length - 1, Math.floor(Math.log10(n) / 3));
+  const v = n / Math.pow(1000, i);
+  return `${v.toFixed(v >= 100 ? 0 : v >= 10 ? 1 : 2)} ${units[i]}`;
+}
+
+function scheduleStorageStatsUpdate(delay = 200) {
+  if (storageStatsTimer) clearTimeout(storageStatsTimer);
+  storageStatsTimer = setTimeout(() => {
+    storageStatsTimer = null;
+    computeAndRenderStorageStats().catch(console.error);
+  }, delay);
+}
+
+async function computeAndRenderStorageStats() {
+  try {
+    const seen = new Set();
+    let cloudBytes = 0;
+    getAllTracks().forEach(t => {
+      if (t.dropboxPath && !seen.has(t.dropboxPath)) {
+        seen.add(t.dropboxPath);
+        if (Number.isFinite(t.dropboxSize)) cloudBytes += t.dropboxSize;
+      }
+    });
+    if (dropboxUsageEl) dropboxUsageEl.textContent = `${formatBytes(cloudBytes)} (${seen.size} pistas)`;
+
+    let localBytes = 0;
+    const db = await openMediaDatabase();
+    if (db) {
+      localBytes = await new Promise(resolve => {
+        const tx = db.transaction(IDB_CONFIG.store, 'readonly');
+        const req = tx.objectStore(IDB_CONFIG.store).getAll();
+        req.onsuccess = () => {
+          const arr = Array.isArray(req.result) ? req.result : [];
+          const sum = arr.reduce((acc, r) => acc + (r?.size || (r?.buffer?.byteLength || 0)), 0);
+          resolve(sum);
+        };
+        req.onerror = () => resolve(0);
+      });
+    }
+    if (localUsageEl) localUsageEl.textContent = `${formatBytes(localBytes)}`;
+  } catch (e) {
+    console.warn('storage stats error', e);
+  }
+}
+
 function updateTrackThumbnails(track) {
   if (!track || !track.coverUrl || !playlistEl) return;
   const nodes = playlistEl.querySelectorAll(`li.track[data-track-id="${track.id}"] img.track-thumb`);
@@ -3299,6 +3356,7 @@ async function initialize() {
   if (isDropboxConnected()) {
     performDropboxSync({ loadRemote: true }).catch(console.error);
   }
+  scheduleStorageStatsUpdate(0);
 }
 
 handleDropboxRedirect().catch(console.error).finally(() => {
