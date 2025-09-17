@@ -44,7 +44,7 @@ const state = {
   autoLoop: Boolean(loopToggle?.checked),
 };
 
-const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+let audioContext = null;
 const players = [];
 let activePlayerIndex = 0;
 let dragIndex = null;
@@ -193,6 +193,23 @@ function serializeTrack(track) {
     dropboxSize: track.dropboxSize ?? null,
     dropboxUpdatedAt: track.dropboxUpdatedAt ?? null,
     waveform: track.waveform ?? null,
+  };
+}
+
+// Local storage serializer (omit heavy fields like waveform to avoid quota issues)
+function serializeTrackLocal(track) {
+  return {
+    id: track.id,
+    name: track.name,
+    fileName: track.fileName,
+    duration: track.duration,
+    size: track.size ?? null,
+    lastModified: track.lastModified ?? null,
+    dropboxPath: track.dropboxPath ?? null,
+    dropboxRev: track.dropboxRev ?? null,
+    dropboxSize: track.dropboxSize ?? null,
+    dropboxUpdatedAt: track.dropboxUpdatedAt ?? null,
+    // waveform intentionally omitted
   };
 }
 
@@ -633,7 +650,7 @@ async function ensureWaveform(track) {
 async function computeWaveformFromArrayBuffer(arrayBuffer) {
   const buffer = await new Promise((resolve, reject) => {
     const copy = arrayBuffer.slice(0);
-    audioContext.decodeAudioData(copy, resolve, reject);
+    getAudioContext().decodeAudioData(copy, resolve, reject);
   });
   const peaks = extractPeaks(buffer, WAVEFORM_SAMPLES);
   return {
@@ -685,18 +702,22 @@ function createPlayer() {
   const audio = new Audio();
   audio.preload = 'auto';
   audio.crossOrigin = 'anonymous';
-  const source = audioContext.createMediaElementSource(audio);
-  const gain = audioContext.createGain();
+  const ctx = getAudioContext();
+  const source = ctx.createMediaElementSource(audio);
+  const gain = ctx.createGain();
   gain.gain.value = 0;
   source.connect(gain);
-  gain.connect(audioContext.destination);
+  gain.connect(ctx.destination);
   const player = { audio, gain, stopTimeout: null, advanceHandler: null, trackId: null };
   audio.addEventListener('timeupdate', () => handleWaveformProgress(player));
   audio.addEventListener('loadedmetadata', () => handleWaveformMetadata(player));
   return player;
 }
 
-players.push(createPlayer(), createPlayer());
+function ensurePlayers() {
+  if (players.length >= 2) return;
+  players.push(createPlayer(), createPlayer());
+}
 
 function cancelAutoAdvance(player) {
   if (player.advanceHandler) {
@@ -739,9 +760,17 @@ function scheduleAutoAdvance(player, index) {
   player.audio.addEventListener('timeupdate', handler);
 }
 
+function getAudioContext() {
+  if (!audioContext) {
+    audioContext = new (window.AudioContext || window.webkitAudioContext)();
+  }
+  return audioContext;
+}
+
 async function ensureContextRunning() {
-  if (audioContext.state === 'suspended') {
-    await audioContext.resume();
+  const ctx = getAudioContext();
+  if (ctx.state === 'suspended') {
+    await ctx.resume();
   }
 }
 
@@ -882,6 +911,7 @@ togglePlayBtn?.addEventListener('click', () => {
   if (!state.tracks.length) {
     return;
   }
+  ensurePlayers();
   if (state.currentIndex === -1) {
     playTrack(0).catch(console.error);
     return;
@@ -1220,6 +1250,7 @@ async function playTrack(index, options = {}) {
   const hasCurrent = state.currentIndex !== -1 && state.isPlaying;
   const useFade = fade && hasCurrent;
   const previousPlayerIndex = activePlayerIndex;
+  ensurePlayers();
   const nextPlayerIndex = useFade ? 1 - activePlayerIndex : activePlayerIndex;
   const nextPlayer = players[nextPlayerIndex];
   const previousPlayer = players[previousPlayerIndex];
@@ -1272,7 +1303,7 @@ async function playTrack(index, options = {}) {
     }
   }
 
-  const now = audioContext.currentTime;
+  const now = getAudioContext().currentTime;
   const fallbackFade = Number.isFinite(state.fadeDuration) ? state.fadeDuration : CROSS_FADE_MIN;
   const resolvedFade = Number.isFinite(fadeDurationOverride) ? fadeDurationOverride : fallbackFade;
   const fadeDuration = useFade ? Math.max(resolvedFade, CROSS_FADE_MIN) : CROSS_FADE_MIN;
@@ -1293,7 +1324,7 @@ async function playTrack(index, options = {}) {
       }
       previousPlayer.audio.pause();
       previousPlayer.audio.currentTime = 0;
-      previousPlayer.gain.gain.setValueAtTime(0, audioContext.currentTime);
+    previousPlayer.gain.gain.setValueAtTime(0, getAudioContext().currentTime);
       previousPlayer.trackId = null;
     }, fadeDuration * 1000 + 120);
   } else if (previousPlayerIndex !== nextPlayerIndex) {
@@ -1329,15 +1360,20 @@ async function playTrack(index, options = {}) {
 }
 
 function stopPlayback() {
-  players.forEach(player => {
-    cancelAutoAdvance(player);
-    player.audio.onended = null;
-    player.audio.pause();
-    player.audio.currentTime = 0;
-    player.gain.gain.setValueAtTime(0, audioContext.currentTime);
-    window.clearTimeout(player.stopTimeout);
-    player.trackId = null;
-  });
+  if (players.length) {
+    const now = audioContext ? getAudioContext().currentTime : 0;
+    players.forEach(player => {
+      cancelAutoAdvance(player);
+      player.audio.onended = null;
+      player.audio.pause();
+      player.audio.currentTime = 0;
+      if (audioContext) {
+        player.gain.gain.setValueAtTime(0, now);
+      }
+      window.clearTimeout(player.stopTimeout);
+      player.trackId = null;
+    });
+  }
   state.currentIndex = -1;
   state.isPlaying = false;
   updateNowPlaying();
@@ -1468,7 +1504,7 @@ function persistLocalPlaylist() {
     playlists: state.playlists.map(playlist => ({
       id: playlist.id,
       name: playlist.name,
-      tracks: playlist.tracks.map(serializeTrack),
+      tracks: playlist.tracks.map(serializeTrackLocal),
     })),
     activePlaylistId: state.activePlaylistId,
     fadeDuration: state.fadeDuration,
