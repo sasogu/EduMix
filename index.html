@@ -25,6 +25,13 @@
         <img id="coverArt" class="cover-art" alt="Carátula del álbum" hidden />
         <div id="nowPlaying">Ninguna pista seleccionada</div>
       </div>
+      <div id="nowRating" class="now-rating" hidden>
+        <button type="button" class="star-button" data-value="1" aria-label="Valorar 1 estrella">☆</button>
+        <button type="button" class="star-button" data-value="2" aria-label="Valorar 2 estrellas">☆</button>
+        <button type="button" class="star-button" data-value="3" aria-label="Valorar 3 estrellas">☆</button>
+        <button type="button" class="star-button" data-value="4" aria-label="Valorar 4 estrellas">☆</button>
+        <button type="button" class="star-button" data-value="5" aria-label="Valorar 5 estrellas">☆</button>
+      </div>
       <div class="playback-controls">
         <button id="prevTrack" class="ghost">◀︎</button>
         <button id="togglePlay" disabled>Reproducir</button>
@@ -41,6 +48,11 @@
         <input type="range" id="speedSlider" min="0.5" max="1.5" step="0.01" value="1" aria-label="Velocidad de reproducción" />
         <span id="speedValue">1×</span>
         <button id="speedReset" type="button" class="ghost icon-button" title="Restablecer a 1×" aria-label="Restablecer a 1×">⟲</button>
+      </label>
+      <label class="loop-control" for="normToggle">
+        <span aria-hidden="true" title="Normalización de volumen">🎚️</span>
+        <input type="checkbox" id="normToggle" aria-label="Normalización de volumen" checked />
+        <span class="loop-indicator" aria-hidden="true"></span>
       </label>
       <label class="loop-control" for="loopToggle">
         <span aria-hidden="true" title="Repetir automáticamente">🔁</span>
@@ -131,7 +143,7 @@
   </main>
 
   <footer>
-    <p>EduMix v0.3.9</p>
+    <p>EduMix v0.4.0</p>
   </footer>
 
   <script type="module" src="app.js"></script>

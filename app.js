@@ -27,6 +27,7 @@ const dropboxDisconnectBtn = document.getElementById('dropboxDisconnect');
 const uploadOnPlayOnlyToggle = document.getElementById('uploadOnPlayOnly');
 const downloadOnPlayOnlyToggle = document.getElementById('downloadOnPlayOnly');
 const preferLocalSourceToggle = document.getElementById('preferLocalSource');
+const normalizationToggle = document.getElementById('normToggle');
 // Declarado para evitar ReferenceError en usos con optional chaining
 const dropboxRetryFailedBtn = document.getElementById('dropboxRetryFailed');
 const cloudSyncCard = document.querySelector('.cloud-sync');
@@ -34,6 +35,7 @@ const waveformCanvas = document.getElementById('waveformCanvas');
 const waveformMessage = document.getElementById('waveformMessage');
 const waveformContainer = document.querySelector('.waveform');
 const coverArtImg = document.getElementById('coverArt');
+const nowRatingEl = document.getElementById('nowRating');
 const nowPlayingSectionEl = document.getElementById('nowPlayingSection');
 const nowPlayingRowEl = document.querySelector('.now-playing-row');
 const coverLightboxEl = document.getElementById('coverLightbox');
@@ -80,6 +82,7 @@ const state = {
   viewPageIndex: 0,
   viewSort: 'none',
   viewMinRating: 0,
+  normalizationEnabled: true,
 };
 
 // Estado de reproducción aleatoria
@@ -380,6 +383,7 @@ function serializeTrack(track) {
     duration: track.duration,
     updatedAt: track.updatedAt ?? null,
     rating: Number.isFinite(track.rating) ? track.rating : 0,
+    normalizationGain: Number.isFinite(track.normalizationGain) ? track.normalizationGain : null,
     size: track.size ?? null,
     lastModified: track.lastModified ?? null,
     dropboxPath: track.dropboxPath ?? null,
@@ -399,6 +403,7 @@ function serializeTrackLocal(track) {
     duration: track.duration,
     updatedAt: track.updatedAt ?? null,
     rating: Number.isFinite(track.rating) ? track.rating : 0,
+    normalizationGain: Number.isFinite(track.normalizationGain) ? track.normalizationGain : null,
     size: track.size ?? null,
     lastModified: track.lastModified ?? null,
     dropboxPath: track.dropboxPath ?? null,
@@ -418,6 +423,7 @@ function deserializeTrack(entry) {
     duration: entry.duration ?? null,
     updatedAt: entry.updatedAt ?? null,
     rating: Number.isFinite(entry.rating) ? entry.rating : 0,
+    normalizationGain: Number.isFinite(entry.normalizationGain) ? entry.normalizationGain : null,
     size: entry.size ?? null,
     lastModified: entry.lastModified ?? null,
     dropboxPath: entry.dropboxPath ?? null,
@@ -885,6 +891,10 @@ async function ensureWaveform(track) {
     }
     const waveform = await computeWaveformFromArrayBuffer(arrayBuffer);
     track.waveform = waveform;
+    // Calcular ganancia de normalización basada en picos
+    if (Array.isArray(waveform.peaks) && waveform.peaks.length) {
+      track.normalizationGain = computeNormalizationFromPeaks(waveform.peaks);
+    }
     if ((!Number.isFinite(track.duration) || track.duration === null) && Number.isFinite(waveform.duration)) {
       track.duration = waveform.duration;
     }
@@ -967,9 +977,18 @@ function createPlayer() {
   const source = ctx.createMediaElementSource(audio);
   const gain = ctx.createGain();
   gain.gain.value = 0;
+  const compressor = ctx.createDynamicsCompressor();
+  try {
+    compressor.threshold.value = -6;
+    compressor.knee.value = 4;
+    compressor.ratio.value = 4;
+    compressor.attack.value = 0.01;
+    compressor.release.value = 0.25;
+  } catch {}
   source.connect(gain);
-  gain.connect(ctx.destination);
-  const player = { audio, gain, stopTimeout: null, advanceHandler: null, trackId: null };
+  gain.connect(compressor);
+  compressor.connect(ctx.destination);
+  const player = { audio, gain, compressor, stopTimeout: null, advanceHandler: null, trackId: null };
   audio.addEventListener('timeupdate', () => handleWaveformProgress(player));
   audio.addEventListener('loadedmetadata', () => handleWaveformMetadata(player));
   return player;
@@ -1348,6 +1367,13 @@ pagerPrevBtn?.addEventListener('click', () => {
   state.viewPageIndex = Math.max(0, (state.viewPageIndex || 0) - 1);
   renderPlaylist();
   persistLocalPlaylist();
+});
+
+normalizationToggle?.addEventListener('change', () => {
+  state.normalizationEnabled = !!normalizationToggle.checked;
+  updateNormalizationLive();
+  persistLocalPlaylist();
+  // Se guarda en Dropbox junto al resto de ajustes en la próxima sync
 });
 
 pagerNextBtn?.addEventListener('click', () => {
@@ -1750,9 +1776,10 @@ async function playTrack(index, options = {}) {
   const fallbackFade = Number.isFinite(state.fadeDuration) ? state.fadeDuration : CROSS_FADE_MIN;
   const resolvedFade = Number.isFinite(fadeDurationOverride) ? fadeDurationOverride : fallbackFade;
   const fadeDuration = useFade ? Math.max(resolvedFade, CROSS_FADE_MIN) : CROSS_FADE_MIN;
+  const baseGain = state.normalizationEnabled && Number.isFinite(track.normalizationGain) && track.normalizationGain > 0 ? track.normalizationGain : 1;
   nextPlayer.gain.gain.cancelScheduledValues(now);
-  nextPlayer.gain.gain.setValueAtTime(useFade ? 0 : 1, now);
-  nextPlayer.gain.gain.linearRampToValueAtTime(1, now + (useFade ? fadeDuration : 0.05));
+  nextPlayer.gain.gain.setValueAtTime(useFade ? 0 : baseGain, now);
+  nextPlayer.gain.gain.linearRampToValueAtTime(baseGain, now + (useFade ? fadeDuration : 0.05));
 
   if (useFade) {
     previousPlayer.gain.gain.cancelScheduledValues(now);
@@ -1835,6 +1862,7 @@ function updateNowPlaying() {
   if (!track) {
     nowPlayingEl.textContent = 'Ninguna pista seleccionada';
     updateCoverArtDisplay(null);
+    updateNowRatingUI();
     return;
   }
   const duration = track.duration ? ` · ${formatDuration(track.duration)}` : '';
@@ -1842,6 +1870,7 @@ function updateNowPlaying() {
   if (track.coverUrl) {
     updateCoverArtDisplay(track);
   }
+  updateNowRatingUI();
 }
 
 function syncLoopToggle() {
@@ -2088,6 +2117,7 @@ function persistLocalPlaylist() {
     downloadOnPlayOnly: state.downloadOnPlayOnly,
     preferLocalSource: state.preferLocalSource,
     playbackRate: state.playbackRate,
+    normalizationEnabled: state.normalizationEnabled,
     playlistRev: dropboxPlaylistMeta.rev || null,
     playlistServerModified: dropboxPlaylistMeta.serverModified || null,
     perListMeta: dropboxPerListMeta,
@@ -2193,6 +2223,12 @@ function loadLocalPlaylist() {
     }
     if (Number.isFinite(data?.playbackRate)) {
       state.playbackRate = Number(data.playbackRate) || 1;
+    }
+    if (typeof data?.normalizationEnabled === 'boolean') {
+      state.normalizationEnabled = data.normalizationEnabled;
+      if (normalizationToggle) normalizationToggle.checked = state.normalizationEnabled;
+    } else if (normalizationToggle) {
+      normalizationToggle.checked = true;
     }
     updateSpeedUI();
   } catch (error) {
@@ -2734,6 +2770,7 @@ async function saveDropboxPlaylist(token) {
     uploadOnPlayOnly: state.uploadOnPlayOnly,
     downloadOnPlayOnly: state.downloadOnPlayOnly,
     playbackRate: state.playbackRate,
+    normalizationEnabled: state.normalizationEnabled,
     playlists: state.playlists.map(playlist => ({
       id: playlist.id,
       name: playlist.name,
@@ -2892,19 +2929,22 @@ async function pullDropboxPlaylist(token) {
             }
             const existingInfo = localTrackMap.get(entry.id);
             let track;
-          if (existingInfo) {
-            track = existingInfo.track;
-            localTrackMap.delete(entry.id);
-            track.name = entry.name || track.name;
-            track.fileName = entry.fileName ?? track.fileName ?? track.name;
-            if (Number.isFinite(entry.duration)) {
-              track.duration = entry.duration;
-            }
-            if (Number.isFinite(entry.rating)) {
-              track.rating = entry.rating;
-            }
-          } else {
-            track = deserializeTrack(entry);
+            if (existingInfo) {
+              track = existingInfo.track;
+              localTrackMap.delete(entry.id);
+              track.name = entry.name || track.name;
+              track.fileName = entry.fileName ?? track.fileName ?? track.name;
+              if (Number.isFinite(entry.duration)) {
+                track.duration = entry.duration;
+              }
+              if (Number.isFinite(entry.normalizationGain)) {
+                track.normalizationGain = entry.normalizationGain;
+              }
+              if (Number.isFinite(entry.rating)) {
+                track.rating = entry.rating;
+              }
+            } else {
+              track = deserializeTrack(entry);
           }
             if (entry.dropboxPath) {
               track.dropboxPath = entry.dropboxPath;
@@ -2980,6 +3020,10 @@ async function pullDropboxPlaylist(token) {
         state.playbackRate = Number(json.playbackRate) || 1;
         updateSpeedUI();
       }
+      if (typeof json.normalizationEnabled === 'boolean') {
+        state.normalizationEnabled = json.normalizationEnabled;
+        if (normalizationToggle) normalizationToggle.checked = state.normalizationEnabled;
+      }
       if (typeof json.uploadOnPlayOnly === 'boolean') {
         state.uploadOnPlayOnly = json.uploadOnPlayOnly;
         if (uploadOnPlayOnlyToggle) {
@@ -3025,6 +3069,9 @@ async function pullDropboxPlaylist(token) {
         existing.url = null;
         if (!existing.duration && entry.duration) {
           existing.duration = entry.duration;
+        }
+        if (Number.isFinite(entry.normalizationGain)) {
+          existing.normalizationGain = entry.normalizationGain;
         }
         if (Number.isFinite(entry.rating)) {
           existing.rating = entry.rating;
@@ -3491,6 +3538,41 @@ function updateCoverArtDisplay(track) {
   nowPlayingRowEl?.classList.add('has-cover');
 }
 
+// ========= Normalización de volumen =========
+const NORMALIZATION_TARGET_PEAK = 0.9; // objetivo relativo [0..1]
+const NORMALIZATION_MAX_GAIN = 3.16; // ~ +10 dB
+
+function computeNormalizationFromPeaks(peaks) {
+  if (!Array.isArray(peaks) || !peaks.length) return 1;
+  let maxAbs = 0;
+  for (let i = 0; i < peaks.length; i += 1) {
+    const p = peaks[i];
+    const hi = Math.max(Math.abs(p[0] || 0), Math.abs(p[1] || 0));
+    if (hi > maxAbs) maxAbs = hi;
+  }
+  if (!Number.isFinite(maxAbs) || maxAbs <= 0) return 1;
+  const gain = NORMALIZATION_TARGET_PEAK / maxAbs;
+  return Math.min(Math.max(gain, 0.25), NORMALIZATION_MAX_GAIN);
+}
+
+function updateNowRatingUI() {
+  if (!nowRatingEl) return;
+  const track = state.tracks[state.currentIndex];
+  if (!track) {
+    nowRatingEl.hidden = true;
+    return;
+  }
+  nowRatingEl.hidden = false;
+  const rating = Number(track.rating) || 0;
+  const buttons = nowRatingEl.querySelectorAll('button.star-button');
+  buttons.forEach((btn, idx) => {
+    const val = idx + 1;
+    btn.textContent = val <= rating ? '★' : '☆';
+    btn.setAttribute('aria-pressed', val <= rating ? 'true' : 'false');
+    btn.disabled = false;
+  });
+}
+
 function openCoverLightbox(src) {
   if (!coverLightboxEl || !coverLightboxImg) return;
   coverLightboxImg.src = src || coverArtImg?.src || '';
@@ -3590,6 +3672,44 @@ function updateSpeedUI() {
   players.forEach(p => { try { p.audio.playbackRate = rate; } catch {} });
 }
 
+function setPlaybackRate(rate) {
+  const clamped = Math.max(0.5, Math.min(1.5, Math.round((Number(rate) || 1) * 100) / 100));
+  if (state.playbackRate === clamped) return;
+  state.playbackRate = clamped;
+  updateSpeedUI();
+  persistLocalPlaylist();
+}
+
+function nudgePlaybackRate(delta) {
+  setPlaybackRate((Number(state.playbackRate) || 1) + (Number(delta) || 0));
+}
+
+function updateNormalizationLive() {
+  if (!state.normalizationEnabled) {
+    // subir a 1× de forma suave
+    if (state.currentIndex >= 0 && players.length) {
+      const p = players[activePlayerIndex];
+      const now = getAudioContext().currentTime;
+      try {
+        p.gain.gain.cancelScheduledValues(now);
+        p.gain.gain.linearRampToValueAtTime(1, now + 0.1);
+      } catch {}
+    }
+    return;
+  }
+  const track = state.tracks[state.currentIndex];
+  if (!track) return;
+  const baseGain = Number.isFinite(track.normalizationGain) && track.normalizationGain > 0 ? track.normalizationGain : 1;
+  if (players.length) {
+    const p = players[activePlayerIndex];
+    const now = getAudioContext().currentTime;
+    try {
+      p.gain.gain.cancelScheduledValues(now);
+      p.gain.gain.linearRampToValueAtTime(baseGain, now + 0.12);
+    } catch {}
+  }
+}
+
 async function initialize() {
   loadLocalPlaylist();
   await restoreLocalMedia();
@@ -3612,6 +3732,49 @@ async function initialize() {
   coverLightboxEl?.addEventListener('click', () => closeCoverLightbox());
   window.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') closeCoverLightbox();
+    // Atajos de valoración rápida: teclas 1..5
+    if (!e.ctrlKey && !e.metaKey && !e.altKey) {
+      if (/^[1-5]$/.test(e.key) && state.currentIndex >= 0) {
+        const tag = (e.target && e.target.tagName) ? String(e.target.tagName).toLowerCase() : '';
+        if (tag !== 'input' && tag !== 'textarea' && tag !== 'select' && !(e.target && e.target.isContentEditable)) {
+          setTrackRating(state.currentIndex, Number(e.key));
+          updateNowRatingUI();
+        }
+      }
+      // Atajos de velocidad: +/- y R para reset
+      const tag = (e.target && e.target.tagName) ? String(e.target.tagName).toLowerCase() : '';
+      const isTyping = tag === 'input' || tag === 'textarea' || tag === 'select' || (e.target && e.target.isContentEditable);
+      if (!isTyping) {
+        // reset a 1×
+        if (e.key === 'r' || e.key === 'R') {
+          e.preventDefault();
+          setPlaybackRate(1);
+          return;
+        }
+        // subir velocidad
+        if (e.key === '+' || (e.key === '=' && e.shiftKey) || e.key === 'Add') {
+          e.preventDefault();
+          nudgePlaybackRate(0.01);
+          return;
+        }
+        // bajar velocidad
+        if (e.key === '-' || e.key === '_' || e.key === 'Subtract') {
+          e.preventDefault();
+          nudgePlaybackRate(-0.01);
+          return;
+        }
+      }
+    }
+  });
+  // Click en estrellas de "Reproducción"
+  nowRatingEl?.addEventListener('click', (ev) => {
+    const btn = ev.target.closest('button.star-button');
+    if (!btn) return;
+    const val = Number(btn.dataset.value) || 0;
+    if (state.currentIndex >= 0) {
+      setTrackRating(state.currentIndex, val);
+      updateNowRatingUI();
+    }
   });
 }
 
@@ -3706,6 +3869,7 @@ async function pullDropboxPlaylistsPerList(token) {
           track.name = entry.name || track.name;
           track.fileName = entry.fileName ?? track.fileName ?? track.name;
           if (Number.isFinite(entry.duration)) track.duration = entry.duration;
+          if (Number.isFinite(entry.normalizationGain)) track.normalizationGain = entry.normalizationGain;
           if (Number.isFinite(entry.rating)) track.rating = entry.rating;
           if (entry.dropboxPath) {
             track.dropboxPath = entry.dropboxPath;
@@ -3814,6 +3978,7 @@ async function saveDropboxSettings(token) {
     downloadOnPlayOnly: state.downloadOnPlayOnly,
     preferLocalSource: state.preferLocalSource,
     playbackRate: state.playbackRate,
+    normalizationEnabled: state.normalizationEnabled,
   };
   const body = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
   const response = await fetch('https://content.dropboxapi.com/2/files/upload', {
@@ -3860,5 +4025,6 @@ async function pullDropboxSettings(token) {
   if (typeof json.downloadOnPlayOnly === 'boolean') { state.downloadOnPlayOnly = json.downloadOnPlayOnly; if (downloadOnPlayOnlyToggle) downloadOnPlayOnlyToggle.checked = state.downloadOnPlayOnly; }
   if (typeof json.preferLocalSource === 'boolean') { state.preferLocalSource = json.preferLocalSource; if (preferLocalSourceToggle) preferLocalSourceToggle.checked = state.preferLocalSource; }
   if (Number.isFinite(json.playbackRate)) { state.playbackRate = Number(json.playbackRate) || 1; updateSpeedUI(); }
+  if (typeof json.normalizationEnabled === 'boolean') { state.normalizationEnabled = json.normalizationEnabled; if (normalizationToggle) normalizationToggle.checked = state.normalizationEnabled; }
   persistLocalPlaylist();
 }
