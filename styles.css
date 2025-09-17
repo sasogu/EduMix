@@ -411,6 +411,15 @@ button.ghost:not(:disabled):hover {
   border-color: rgba(74, 144, 226, 0.35);
 }
 
+.cloud-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.6rem;
+  font-size: 0.9rem;
+  user-select: none;
+}
+
 .cloud-sync.is-syncing {
   border-style: dashed;
 }

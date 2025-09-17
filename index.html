@@ -75,13 +75,21 @@
           <button id="dropboxRetryFailed" class="ghost" hidden>Reintentar fallidas</button>
           <button id="dropboxDisconnect" class="ghost" hidden>Desconectar</button>
         </div>
+        <label class="cloud-option" title="Sube las pistas a Dropbox solo cuando las reproduces">
+          <input type="checkbox" id="uploadOnPlayOnly" />
+          Subir a Dropbox solo al reproducir
+        </label>
+        <label class="cloud-option" title="Descarga pistas desde Dropbox solo cuando las reproduces (evita consumos de datos por anticipado)">
+          <input type="checkbox" id="downloadOnPlayOnly" />
+          Descargar desde Dropbox solo al reproducir
+        </label>
       </div>
     </section>
    
   </main>
 
   <footer>
-    <p>EduMix v0.2.8</p>
+    <p>EduMix v0.2.9</p>
   </footer>
 
   <script type="module" src="app.js"></script>

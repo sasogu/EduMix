@@ -18,6 +18,8 @@ const dropboxStatusEl = document.getElementById('dropboxStatus');
 const dropboxConnectBtn = document.getElementById('dropboxConnect');
 const dropboxSyncBtn = document.getElementById('dropboxSync');
 const dropboxDisconnectBtn = document.getElementById('dropboxDisconnect');
+const uploadOnPlayOnlyToggle = document.getElementById('uploadOnPlayOnly');
+const downloadOnPlayOnlyToggle = document.getElementById('downloadOnPlayOnly');
 // Declarado para evitar ReferenceError en usos con optional chaining
 const dropboxRetryFailedBtn = document.getElementById('dropboxRetryFailed');
 const cloudSyncCard = document.querySelector('.cloud-sync');
@@ -48,6 +50,8 @@ const state = {
   fadeDuration: Number(fadeSlider?.value ?? 3),
   autoLoop: Boolean(loopToggle?.checked),
   shuffle: false,
+  uploadOnPlayOnly: false,
+  downloadOnPlayOnly: false,
 };
 
 // Estado de reproducción aleatoria
@@ -678,6 +682,16 @@ function setWaveformTrack(track) {
     drawWaveform(waveformState.peaks, waveformState.progress);
   } else {
     waveformState.peaks = null;
+    const shouldDeferRemote = Boolean(state.downloadOnPlayOnly && (track.isRemote || track.dropboxPath) && !track._hasPlayed);
+    if (shouldDeferRemote) {
+      waveformContainer.classList.remove('is-loading');
+      waveformContainer.classList.remove('has-data');
+      if (waveformMessage) {
+        waveformMessage.textContent = 'La forma de onda se descargará al reproducir.';
+      }
+      drawWaveform(null, 0);
+      return;
+    }
     waveformContainer.classList.add('is-loading');
     if (waveformMessage) {
       waveformMessage.textContent = 'Generando forma de onda…';
@@ -743,6 +757,9 @@ async function ensureWaveform(track) {
       if (stored) {
         arrayBuffer = stored.buffer;
       } else if (track.isRemote || track.dropboxPath) {
+        if (state.downloadOnPlayOnly && !track._hasPlayed) {
+          return null;
+        }
         const ready = await ensureTrackRemoteLink(track);
         if (!ready) {
           return null;
@@ -1148,6 +1165,16 @@ dropboxDisconnectBtn?.addEventListener('click', () => {
   disconnectDropbox();
 });
 
+uploadOnPlayOnlyToggle?.addEventListener('change', () => {
+  state.uploadOnPlayOnly = !!uploadOnPlayOnlyToggle.checked;
+  persistLocalPlaylist();
+});
+
+downloadOnPlayOnlyToggle?.addEventListener('change', () => {
+  state.downloadOnPlayOnly = !!downloadOnPlayOnlyToggle.checked;
+  persistLocalPlaylist();
+});
+
 dropboxRetryFailedBtn?.addEventListener('click', () => {
   if (dropboxState.isSyncing) return;
   const failed = getAllTracks().filter(t => !t.dropboxPath && t._sync === 'error');
@@ -1384,6 +1411,13 @@ async function playTrack(index, options = {}) {
   if (!track) {
     return;
   }
+  // Marca para subir a Dropbox solo si se reproduce, si procede
+  if (state.uploadOnPlayOnly && !track.dropboxPath) {
+    track._shouldUpload = true;
+    requestDropboxSync();
+  }
+  // Marca como reproducida para permitir descargas/forma de onda bajo política "solo al reproducir"
+  track._hasPlayed = true;
   const { fade = true, fadeDurationOverride } = options;
   setWaveformTrack(track);
 
@@ -1717,6 +1751,8 @@ function persistLocalPlaylist() {
     fadeDuration: state.fadeDuration,
     autoLoop: state.autoLoop,
     shuffle: state.shuffle,
+    uploadOnPlayOnly: state.uploadOnPlayOnly,
+    downloadOnPlayOnly: state.downloadOnPlayOnly,
     pendingDeletions: Array.from(pendingDeletions),
     updatedAt: Date.now(),
   };
@@ -1753,6 +1789,22 @@ function loadLocalPlaylist() {
     }
     if (typeof data?.shuffle === 'boolean') {
       state.shuffle = data.shuffle;
+    }
+    if (typeof data?.uploadOnPlayOnly === 'boolean') {
+      state.uploadOnPlayOnly = data.uploadOnPlayOnly;
+      if (uploadOnPlayOnlyToggle) {
+        uploadOnPlayOnlyToggle.checked = state.uploadOnPlayOnly;
+      }
+    } else if (uploadOnPlayOnlyToggle) {
+      uploadOnPlayOnlyToggle.checked = false;
+    }
+    if (typeof data?.downloadOnPlayOnly === 'boolean') {
+      state.downloadOnPlayOnly = data.downloadOnPlayOnly;
+      if (downloadOnPlayOnlyToggle) {
+        downloadOnPlayOnlyToggle.checked = state.downloadOnPlayOnly;
+      }
+    } else if (downloadOnPlayOnlyToggle) {
+      downloadOnPlayOnlyToggle.checked = false;
     }
     if (Array.isArray(data?.playlists)) {
       state.playlists = data.playlists.map(playlist => ({
@@ -1992,7 +2044,11 @@ async function performDropboxSync(options = {}) {
   dropboxState.error = null;
   // preparar progreso
   const baseCandidates = getAllTracks().filter(track => !track.dropboxPath);
-  const candidates = effective.onlyTrackIds ? baseCandidates.filter(t => effective.onlyTrackIds.includes(t.id)) : baseCandidates;
+  const isManualSubset = !!effective.onlyTrackIds;
+  let candidates = isManualSubset ? baseCandidates.filter(t => effective.onlyTrackIds.includes(t.id)) : baseCandidates;
+  if (!isManualSubset && state.uploadOnPlayOnly) {
+    candidates = candidates.filter(t => t._shouldUpload);
+  }
   dropboxState.progressTotal = candidates.length;
   dropboxState.progressDone = 0;
   // marcar en cola
@@ -2153,7 +2209,10 @@ async function uploadOneTrackWithRetry(token, track) {
 }
 
 async function uploadPendingTracks(token, list) {
-  const candidates = Array.isArray(list) ? list : getAllTracks().filter(track => !track.dropboxPath);
+  let candidates = Array.isArray(list) ? list : getAllTracks().filter(track => !track.dropboxPath);
+  if (state.uploadOnPlayOnly) {
+    candidates = candidates.filter(track => track._shouldUpload);
+  }
   if (!candidates.length) return;
 
   const CONCURRENCY = 1;
@@ -2189,6 +2248,8 @@ async function saveDropboxPlaylist(token) {
     fadeDuration: state.fadeDuration,
     autoLoop: state.autoLoop,
     shuffle: state.shuffle,
+    uploadOnPlayOnly: state.uploadOnPlayOnly,
+    downloadOnPlayOnly: state.downloadOnPlayOnly,
     playlists: state.playlists.map(playlist => ({
       id: playlist.id,
       name: playlist.name,
@@ -2362,6 +2423,18 @@ async function pullDropboxPlaylist(token) {
       }
       if (typeof json.shuffle === 'boolean') {
         state.shuffle = json.shuffle;
+      }
+      if (typeof json.uploadOnPlayOnly === 'boolean') {
+        state.uploadOnPlayOnly = json.uploadOnPlayOnly;
+        if (uploadOnPlayOnlyToggle) {
+          uploadOnPlayOnlyToggle.checked = state.uploadOnPlayOnly;
+        }
+      }
+      if (typeof json.downloadOnPlayOnly === 'boolean') {
+        state.downloadOnPlayOnly = json.downloadOnPlayOnly;
+        if (downloadOnPlayOnlyToggle) {
+          downloadOnPlayOnlyToggle.checked = state.downloadOnPlayOnly;
+        }
       }
       ensurePlaylistsInitialized();
       fadeValue.textContent = `${state.fadeDuration.toFixed(1).replace(/\.0$/, '')} s`;
