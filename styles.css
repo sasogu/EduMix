@@ -205,7 +205,7 @@ button.ghost:not(:disabled):hover {
   gap: 0.4rem;
 }
 
-.track-actions .icon-button {
+.icon-button {
   width: 2.5rem;
   height: 2.5rem;
   padding: 0.35rem;
@@ -215,7 +215,7 @@ button.ghost:not(:disabled):hover {
   display: inline-flex;
 }
 
-.track-actions .icon-button:disabled {
+.icon-button:disabled {
   opacity: 0.45;
 }
 

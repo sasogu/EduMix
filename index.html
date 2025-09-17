@@ -47,8 +47,10 @@
         <h2>Lista de reproducción</h2>
         <div class="section-actions">
           <select id="playlistPicker" aria-label="Selecciona una lista"></select>
-          <button id="newPlaylist" class="ghost">Nueva lista</button>
-          <button id="clearPlaylist" class="ghost">Vaciar</button>
+          <button id="newPlaylist" class="ghost icon-button" title="Nueva lista" aria-label="Nueva lista">＋</button>
+          <button id="renamePlaylist" class="ghost icon-button" title="Renombrar lista" aria-label="Renombrar lista">✎</button>
+          <button id="deletePlaylist" class="ghost icon-button" title="Eliminar lista" aria-label="Eliminar lista">🗑</button>
+          <button id="clearPlaylist" class="ghost icon-button" title="Vaciar lista" aria-label="Vaciar lista">🧹</button>
         </div>
       </div>
       <ul id="playlist" aria-live="polite"></ul>

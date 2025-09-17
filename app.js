@@ -7,6 +7,8 @@ const nowPlayingEl = document.getElementById('nowPlaying');
 const clearPlaylistBtn = document.getElementById('clearPlaylist');
 const playlistPicker = document.getElementById('playlistPicker');
 const newPlaylistBtn = document.getElementById('newPlaylist');
+const renamePlaylistBtn = document.getElementById('renamePlaylist');
+const deletePlaylistBtn = document.getElementById('deletePlaylist');
 const fadeSlider = document.getElementById('fadeSlider');
 const fadeValue = document.getElementById('fadeValue');
 const installButton = document.getElementById('installButton');
@@ -15,6 +17,8 @@ const dropboxStatusEl = document.getElementById('dropboxStatus');
 const dropboxConnectBtn = document.getElementById('dropboxConnect');
 const dropboxSyncBtn = document.getElementById('dropboxSync');
 const dropboxDisconnectBtn = document.getElementById('dropboxDisconnect');
+// Declarado para evitar ReferenceError en usos con optional chaining
+const dropboxRetryFailedBtn = document.getElementById('dropboxRetryFailed');
 const cloudSyncCard = document.querySelector('.cloud-sync');
 const waveformCanvas = document.getElementById('waveformCanvas');
 const waveformMessage = document.getElementById('waveformMessage');
@@ -170,6 +174,58 @@ function createPlaylist(name) {
   state.playlists.push(playlist);
   stopPlayback();
   state.activePlaylistId = playlist.id;
+  syncTracksFromActivePlaylist();
+  state.currentIndex = -1;
+  renderPlaylistPicker();
+  renderPlaylist();
+  updateControls();
+  updateNowPlaying();
+  persistLocalPlaylist();
+  requestDropboxSync();
+}
+
+function renameActivePlaylist() {
+  const active = getActivePlaylist();
+  if (!active) return;
+  const proposed = prompt('Nuevo nombre de la lista', active.name || '');
+  if (proposed === null) return;
+  const nextName = proposed.trim();
+  if (!nextName || nextName === active.name) return;
+  active.name = nextName;
+  renderPlaylistPicker();
+  persistLocalPlaylist();
+  requestDropboxSync();
+}
+
+function deleteActivePlaylist() {
+  const active = getActivePlaylist();
+  if (!active) return;
+  const confirmed = window.confirm(`¿Eliminar la lista "${active.name}"? Se eliminarán sus pistas de esta sesión.`);
+  if (!confirmed) return;
+  // Preparar eliminaciones de Dropbox y limpiar blobs/IDB
+  const removeRemotePaths = (active.tracks || [])
+    .map(track => track.dropboxPath)
+    .filter(Boolean);
+  removeRemotePaths.forEach(path => pendingDeletions.add(path));
+  (active.tracks || []).forEach(track => {
+    if (!track.isRemote && track.url) {
+      try { URL.revokeObjectURL(track.url); } catch {}
+    }
+    pendingUploads.delete(track.id);
+    waveformCache.delete(track.id);
+    deleteTrackFile(track.id).catch(console.error);
+  });
+
+  // Eliminar la playlist del estado
+  state.playlists = state.playlists.filter(p => p.id !== active.id);
+  // Asegurar que exista al menos una lista
+  if (!state.playlists.length) {
+    const fallback = createPlaylistObject('Lista 1', []);
+    state.playlists.push(fallback);
+  }
+  // Activar la primera disponible
+  state.activePlaylistId = state.playlists[0].id;
+  stopPlayback();
   syncTracksFromActivePlaylist();
   state.currentIndex = -1;
   renderPlaylistPicker();
@@ -828,6 +884,14 @@ newPlaylistBtn?.addEventListener('click', () => {
   createPlaylist(trimmed);
 });
 
+renamePlaylistBtn?.addEventListener('click', () => {
+  renameActivePlaylist();
+});
+
+deletePlaylistBtn?.addEventListener('click', () => {
+  deleteActivePlaylist();
+});
+
 fadeSlider?.addEventListener('input', () => {
   state.fadeDuration = Number(fadeSlider.value);
   fadeValue.textContent = `${state.fadeDuration.toFixed(1).replace(/\.0$/, '')} s`;
@@ -1427,6 +1491,12 @@ function updateControls() {
   prevTrackBtn.disabled = state.currentIndex <= 0;
   nextTrackBtn.disabled = state.currentIndex === -1 || state.currentIndex >= state.tracks.length - 1;
   clearPlaylistBtn.disabled = !state.tracks.length;
+  if (deletePlaylistBtn) {
+    deletePlaylistBtn.disabled = state.playlists.length <= 1;
+  }
+  if (renamePlaylistBtn) {
+    renamePlaylistBtn.disabled = !state.playlists.length;
+  }
   syncLoopToggle();
   updateDropboxUI();
 }
