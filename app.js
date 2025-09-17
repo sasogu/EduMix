@@ -14,6 +14,7 @@ const deletePlaylistBtn = document.getElementById('deletePlaylist');
 const fadeSlider = document.getElementById('fadeSlider');
 const speedSlider = document.getElementById('speedSlider');
 const speedValue = document.getElementById('speedValue');
+const speedResetBtn = document.getElementById('speedReset');
 const fadeValue = document.getElementById('fadeValue');
 const installButton = document.getElementById('installButton');
 const loopToggle = document.getElementById('loopToggle');
@@ -368,6 +369,7 @@ function serializeTrack(track) {
     fileName: track.fileName,
     duration: track.duration,
     updatedAt: track.updatedAt ?? null,
+    rating: Number.isFinite(track.rating) ? track.rating : 0,
     size: track.size ?? null,
     lastModified: track.lastModified ?? null,
     dropboxPath: track.dropboxPath ?? null,
@@ -386,6 +388,7 @@ function serializeTrackLocal(track) {
     fileName: track.fileName,
     duration: track.duration,
     updatedAt: track.updatedAt ?? null,
+    rating: Number.isFinite(track.rating) ? track.rating : 0,
     size: track.size ?? null,
     lastModified: track.lastModified ?? null,
     dropboxPath: track.dropboxPath ?? null,
@@ -404,6 +407,7 @@ function deserializeTrack(entry) {
     url: null,
     duration: entry.duration ?? null,
     updatedAt: entry.updatedAt ?? null,
+    rating: Number.isFinite(entry.rating) ? entry.rating : 0,
     size: entry.size ?? null,
     lastModified: entry.lastModified ?? null,
     dropboxPath: entry.dropboxPath ?? null,
@@ -1123,6 +1127,12 @@ speedSlider?.addEventListener('change', () => {
   updateSpeedUI();
 });
 
+speedResetBtn?.addEventListener('click', () => {
+  state.playbackRate = 1;
+  updateSpeedUI();
+  persistLocalPlaylist();
+});
+
 loopToggle?.addEventListener('change', () => {
   state.autoLoop = loopToggle.checked;
   updateControls();
@@ -1155,6 +1165,9 @@ playlistEl?.addEventListener('click', event => {
       break;
     case 'remove':
       removeTrack(index);
+      break;
+    case 'rate':
+      setTrackRating(index, Number(button.dataset.value) || 0);
       break;
   }
 });
@@ -1352,6 +1365,7 @@ function addTracks(files) {
         size: file.size,
         lastModified: file.lastModified,
         updatedAt: Date.now(),
+        rating: 0,
         dropboxPath: null,
         dropboxRev: null,
         dropboxSize: null,
@@ -1463,6 +1477,18 @@ function renameTrack(index) {
   if (active) active.updatedAt = Date.now();
   renderPlaylist();
   updateNowPlaying();
+  persistLocalPlaylist();
+  requestDropboxSync();
+}
+
+function setTrackRating(index, value) {
+  const track = state.tracks[index];
+  if (!track) return;
+  const next = Math.max(0, Math.min(5, Math.floor(value)));
+  if (track.rating === next) return;
+  track.rating = next;
+  track.updatedAt = Date.now();
+  renderPlaylist();
   persistLocalPlaylist();
   requestDropboxSync();
 }
@@ -1926,7 +1952,22 @@ function renderPlaylist() {
       flags.style.marginLeft = '0.5rem';
       meta.append(' ', flags);
     }
-    title.append(name, meta);
+    const rating = document.createElement('div');
+    rating.className = 'track-rating';
+    const currentRating = Number.isFinite(track.rating) ? track.rating : 0;
+    for (let r = 1; r <= 5; r += 1) {
+      const star = document.createElement('button');
+      star.className = 'star-button';
+      star.type = 'button';
+      star.textContent = r <= currentRating ? '★' : '☆';
+      star.setAttribute('aria-label', `Valorar ${r} estrella${r>1?'s':''}`);
+      star.setAttribute('aria-pressed', r <= currentRating ? 'true' : 'false');
+      star.dataset.action = 'rate';
+      star.dataset.value = String(r);
+      star.dataset.index = String(index);
+      rating.append(star);
+    }
+    title.append(name, meta, rating);
 
     const actions = document.createElement('div');
     actions.className = 'track-actions';
@@ -2803,17 +2844,20 @@ async function pullDropboxPlaylist(token) {
             }
             const existingInfo = localTrackMap.get(entry.id);
             let track;
-            if (existingInfo) {
-              track = existingInfo.track;
-              localTrackMap.delete(entry.id);
-              track.name = entry.name || track.name;
-              track.fileName = entry.fileName ?? track.fileName ?? track.name;
-              if (Number.isFinite(entry.duration)) {
-                track.duration = entry.duration;
-              }
-            } else {
-              track = deserializeTrack(entry);
+          if (existingInfo) {
+            track = existingInfo.track;
+            localTrackMap.delete(entry.id);
+            track.name = entry.name || track.name;
+            track.fileName = entry.fileName ?? track.fileName ?? track.name;
+            if (Number.isFinite(entry.duration)) {
+              track.duration = entry.duration;
             }
+            if (Number.isFinite(entry.rating)) {
+              track.rating = entry.rating;
+            }
+          } else {
+            track = deserializeTrack(entry);
+          }
             if (entry.dropboxPath) {
               track.dropboxPath = entry.dropboxPath;
               track.dropboxRev = entry.dropboxRev ?? track.dropboxRev ?? null;
@@ -2934,6 +2978,9 @@ async function pullDropboxPlaylist(token) {
         existing.url = null;
         if (!existing.duration && entry.duration) {
           existing.duration = entry.duration;
+        }
+        if (Number.isFinite(entry.rating)) {
+          existing.rating = entry.rating;
         }
         if (entry.waveform?.peaks?.length) {
           existing.waveform = entry.waveform;
@@ -3489,7 +3536,7 @@ function updateSpeedUI() {
     speedSlider.value = String(rate);
   }
   if (speedValue) {
-    const txt = rate.toFixed(2).replace(/\.00$/, '') + '×';
+    const txt = rate.toFixed(1).replace(/\.0$/, '') + '×';
     speedValue.textContent = txt;
   }
   // aplicar a players activos por si no estaban sincronizados
@@ -3612,6 +3659,7 @@ async function pullDropboxPlaylistsPerList(token) {
           track.name = entry.name || track.name;
           track.fileName = entry.fileName ?? track.fileName ?? track.name;
           if (Number.isFinite(entry.duration)) track.duration = entry.duration;
+          if (Number.isFinite(entry.rating)) track.rating = entry.rating;
           if (entry.dropboxPath) {
             track.dropboxPath = entry.dropboxPath;
             track.dropboxRev = entry.dropboxRev ?? track.dropboxRev ?? null;
