@@ -1513,6 +1513,10 @@ async function playTrack(index, options = {}) {
   activePlayerIndex = nextPlayerIndex;
   state.currentIndex = index;
   state.isPlaying = true;
+  if (state.shuffle) {
+    // Modo sin repetición: elimina la pista actual de la cola restante
+    shuffleQueue = (shuffleQueue || []).filter(i => i !== index);
+  }
   updateNowPlaying();
   renderPlaylist();
   updateControls();
