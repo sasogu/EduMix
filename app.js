@@ -8,6 +8,8 @@ const nowPlayingEl = document.getElementById('nowPlaying');
 const clearPlaylistBtn = document.getElementById('clearPlaylist');
 const playlistPicker = document.getElementById('playlistPicker');
 const pageSizeSelect = document.getElementById('pageSizeSelect');
+const sortSelect = document.getElementById('sortSelect');
+const minRatingSelect = document.getElementById('minRatingSelect');
 const newPlaylistBtn = document.getElementById('newPlaylist');
 const renamePlaylistBtn = document.getElementById('renamePlaylist');
 const deletePlaylistBtn = document.getElementById('deletePlaylist');
@@ -76,6 +78,8 @@ const state = {
   playbackRate: 1,
   viewPageSize: 0,
   viewPageIndex: 0,
+  viewSort: 'none',
+  viewMinRating: 0,
 };
 
 // Estado de reproducción aleatoria
@@ -195,6 +199,12 @@ function renderPlaylistPicker() {
   playlistPicker.disabled = state.playlists.length <= 1;
   if (pageSizeSelect) {
     pageSizeSelect.value = String(state.viewPageSize || 0);
+  }
+  if (sortSelect) {
+    sortSelect.value = state.viewSort || 'none';
+  }
+  if (minRatingSelect) {
+    minRatingSelect.value = String(state.viewMinRating || 0);
   }
 }
 
@@ -1147,6 +1157,22 @@ pageSizeSelect?.addEventListener('change', () => {
   persistLocalPlaylist();
 });
 
+sortSelect?.addEventListener('change', () => {
+  const val = String(sortSelect.value || 'none');
+  state.viewSort = val;
+  state.viewPageIndex = 0;
+  renderPlaylist();
+  persistLocalPlaylist();
+});
+
+minRatingSelect?.addEventListener('change', () => {
+  const val = Number(minRatingSelect.value) || 0;
+  state.viewMinRating = Math.max(0, Math.min(5, val));
+  state.viewPageIndex = 0;
+  renderPlaylist();
+  persistLocalPlaylist();
+});
+
 playlistEl?.addEventListener('click', event => {
   const button = event.target.closest('button[data-action]');
   if (!button) {
@@ -1861,12 +1887,33 @@ function updateControls() {
   updatePagerUI();
 }
 
+function buildViewOrder() {
+  const indices = state.tracks.map((_, i) => i);
+  const minR = Math.max(0, Math.min(5, Number(state.viewMinRating) || 0));
+  const filtered = indices.filter(i => (Number(state.tracks[i].rating) || 0) >= minR);
+  if (state.viewSort === 'rating-desc' || state.viewSort === 'rating-asc') {
+    filtered.sort((a, b) => {
+      const ra = Number(state.tracks[a].rating) || 0;
+      const rb = Number(state.tracks[b].rating) || 0;
+      const primary = state.viewSort === 'rating-desc' ? (rb - ra) : (ra - rb);
+      if (primary !== 0) return primary;
+      const na = (state.tracks[a].name || '').toLowerCase();
+      const nb = (state.tracks[b].name || '').toLowerCase();
+      if (na < nb) return -1;
+      if (na > nb) return 1;
+      return a - b;
+    });
+  }
+  return filtered;
+}
+
 function renderPlaylist() {
   if (!playlistEl) {
     return;
   }
   playlistEl.innerHTML = '';
-  const total = state.tracks.length;
+  const order = buildViewOrder();
+  const total = order.length;
   const size = Math.max(0, Number(state.viewPageSize) || 0);
   const pages = size ? Math.max(1, Math.ceil(total / size)) : 1;
   if (size) {
@@ -1877,7 +1924,8 @@ function renderPlaylist() {
   const start = size ? state.viewPageIndex * size : 0;
   const end = size ? Math.min(total, start + size) : total;
 
-  for (let index = start; index < end; index += 1) {
+  for (let pos = start; pos < end; pos += 1) {
+    const index = order[pos];
     const track = state.tracks[index];
     const item = document.createElement('li');
     item.className = 'track';
@@ -2043,7 +2091,7 @@ function persistLocalPlaylist() {
     playlistServerModified: dropboxPlaylistMeta.serverModified || null,
     perListMeta: dropboxPerListMeta,
     settingsMeta: dropboxSettingsMeta,
-    view: { pageSize: state.viewPageSize, pageIndex: state.viewPageIndex },
+    view: { pageSize: state.viewPageSize, pageIndex: state.viewPageIndex, sort: state.viewSort, minRating: state.viewMinRating },
     pendingDeletions: Array.from(pendingDeletions),
     updatedAt: Date.now(),
   };
@@ -2135,6 +2183,10 @@ function loadLocalPlaylist() {
       if (Number.isFinite(data.view.pageSize)) state.viewPageSize = Number(data.view.pageSize);
       if (Number.isFinite(data.view.pageIndex)) state.viewPageIndex = Number(data.view.pageIndex);
       if (pageSizeSelect) pageSizeSelect.value = String(state.viewPageSize || 0);
+      if (typeof data.view.sort === 'string') state.viewSort = data.view.sort;
+      if (sortSelect) sortSelect.value = state.viewSort || 'none';
+      if (Number.isFinite(data.view.minRating)) state.viewMinRating = Number(data.view.minRating) || 0;
+      if (minRatingSelect) minRatingSelect.value = String(state.viewMinRating || 0);
     } else if (pageSizeSelect) {
       pageSizeSelect.value = '0';
     }
@@ -3514,7 +3566,7 @@ function updateTrackThumbnails(track) {
 
 function updatePagerUI() {
   if (!pagerEl || !pagerPrevBtn || !pagerNextBtn || !pagerInfoEl) return;
-  const total = state.tracks.length;
+  const total = buildViewOrder().length;
   const size = Math.max(0, Number(state.viewPageSize) || 0);
   if (!size || total <= size) {
     pagerEl.hidden = true;

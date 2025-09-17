@@ -64,6 +64,19 @@
             <option value="50">50</option>
             <option value="100">100</option>
           </select>
+          <select id="minRatingSelect" aria-label="Mínimo de estrellas">
+            <option value="0">★ 0+</option>
+            <option value="1">★ 1+</option>
+            <option value="2">★ 2+</option>
+            <option value="3">★ 3+</option>
+            <option value="4">★ 4+</option>
+            <option value="5">★ 5</option>
+          </select>
+          <select id="sortSelect" aria-label="Ordenar por">
+            <option value="none">Orden por defecto</option>
+            <option value="rating-desc">⭐ Alta → baja</option>
+            <option value="rating-asc">⭐ Baja → alta</option>
+          </select>
           <button id="newPlaylist" class="ghost icon-button" title="Nueva lista" aria-label="Nueva lista">＋</button>
           <button id="renamePlaylist" class="ghost icon-button" title="Renombrar lista" aria-label="Renombrar lista">✎</button>
           <button id="deletePlaylist" class="ghost icon-button" title="Eliminar lista" aria-label="Eliminar lista">🗑</button>
@@ -118,7 +131,7 @@
   </main>
 
   <footer>
-    <p>EduMix v0.3.6</p>
+    <p>EduMix v0.3.8</p>
   </footer>
 
   <script type="module" src="app.js"></script>
