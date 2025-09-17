@@ -32,13 +32,18 @@
         <button id="shuffleToggle" class="ghost icon-button" title="Reproducción aleatoria" aria-label="Reproducción aleatoria" aria-pressed="false">🔀</button>
       </div>
       <label class="fade-control">
-        <span>Duración del fundido</span>
-        <input type="range" id="fadeSlider" min="0" max="8" step="0.5" value="3" />
+        <span aria-hidden="true" title="Duración del fundido">🌫️</span>
+        <input type="range" id="fadeSlider" min="0" max="8" step="0.5" value="3" aria-label="Duración del fundido" />
         <span id="fadeValue">3 s</span>
       </label>
+      <label class="fade-control" for="speedSlider">
+        <span aria-hidden="true" title="Velocidad de reproducción">⏱️</span>
+        <input type="range" id="speedSlider" min="0.5" max="2" step="0.05" value="1" aria-label="Velocidad de reproducción" />
+        <span id="speedValue">1×</span>
+      </label>
       <label class="loop-control" for="loopToggle">
-        <span>Repetir automáticamente</span>
-        <input type="checkbox" id="loopToggle" />
+        <span aria-hidden="true" title="Repetir automáticamente">🔁</span>
+        <input type="checkbox" id="loopToggle" aria-label="Repetir automáticamente" />
         <span class="loop-indicator" aria-hidden="true"></span>
       </label>
       <div class="waveform">
@@ -112,9 +117,12 @@
   </main>
 
   <footer>
-    <p>EduMix v0.3.4</p>
+    <p>EduMix v0.3.5</p>
   </footer>
 
   <script type="module" src="app.js"></script>
+  <div id="coverLightbox" class="lightbox" hidden>
+    <img id="coverLightboxImg" alt="Carátula ampliada" />
+  </div>
 </body>
 </html>

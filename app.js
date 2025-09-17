@@ -12,6 +12,8 @@ const newPlaylistBtn = document.getElementById('newPlaylist');
 const renamePlaylistBtn = document.getElementById('renamePlaylist');
 const deletePlaylistBtn = document.getElementById('deletePlaylist');
 const fadeSlider = document.getElementById('fadeSlider');
+const speedSlider = document.getElementById('speedSlider');
+const speedValue = document.getElementById('speedValue');
 const fadeValue = document.getElementById('fadeValue');
 const installButton = document.getElementById('installButton');
 const loopToggle = document.getElementById('loopToggle');
@@ -31,6 +33,8 @@ const waveformContainer = document.querySelector('.waveform');
 const coverArtImg = document.getElementById('coverArt');
 const nowPlayingSectionEl = document.getElementById('nowPlayingSection');
 const nowPlayingRowEl = document.querySelector('.now-playing-row');
+const coverLightboxEl = document.getElementById('coverLightbox');
+const coverLightboxImg = document.getElementById('coverLightboxImg');
 const pagerEl = document.getElementById('playlistPager');
 const pagerPrevBtn = document.getElementById('pagerPrev');
 const pagerNextBtn = document.getElementById('pagerNext');
@@ -68,6 +72,7 @@ const state = {
   uploadOnPlayOnly: false,
   downloadOnPlayOnly: false,
   preferLocalSource: true,
+  playbackRate: 1,
   viewPageSize: 0,
   viewPageIndex: 0,
 };
@@ -937,6 +942,13 @@ function createPlayer() {
   const audio = new Audio();
   audio.preload = 'auto';
   audio.crossOrigin = 'anonymous';
+  // Velocidad y tono
+  try {
+    audio.playbackRate = Number(state.playbackRate) || 1;
+    if ('preservesPitch' in audio) audio.preservesPitch = true;
+    if ('mozPreservesPitch' in audio) audio.mozPreservesPitch = true;
+    if ('webkitPreservesPitch' in audio) audio.webkitPreservesPitch = true;
+  } catch {}
   const ctx = getAudioContext();
   const source = ctx.createMediaElementSource(audio);
   const gain = ctx.createGain();
@@ -1093,6 +1105,22 @@ fadeSlider?.addEventListener('input', () => {
   state.fadeDuration = Number(fadeSlider.value);
   fadeValue.textContent = `${state.fadeDuration.toFixed(1).replace(/\.0$/, '')} s`;
   persistLocalPlaylist();
+});
+
+speedSlider?.addEventListener('input', () => {
+  const rate = Number(speedSlider.value) || 1;
+  state.playbackRate = rate;
+  // Aplicar al vuelo a ambos reproductores
+  players.forEach(p => {
+    try { p.audio.playbackRate = rate; } catch {}
+  });
+  persistLocalPlaylist();
+  // No es necesario sincronizar inmediatamente; se guarda en settings en la próxima sync
+  updateSpeedUI();
+});
+
+speedSlider?.addEventListener('change', () => {
+  updateSpeedUI();
 });
 
 loopToggle?.addEventListener('change', () => {
@@ -1625,6 +1653,8 @@ async function playTrack(index, options = {}) {
       console.warn('No se pudo preparar el audio', loadError);
     }
   }
+  // Aplicar velocidad actual
+  try { nextPlayer.audio.playbackRate = Number(state.playbackRate) || 1; } catch {}
   nextPlayer.audio.currentTime = 0;
   nextPlayer.trackId = track.id;
   // Intentar extraer carátula si no la tenemos aún
@@ -1967,6 +1997,7 @@ function persistLocalPlaylist() {
     uploadOnPlayOnly: state.uploadOnPlayOnly,
     downloadOnPlayOnly: state.downloadOnPlayOnly,
     preferLocalSource: state.preferLocalSource,
+    playbackRate: state.playbackRate,
     playlistRev: dropboxPlaylistMeta.rev || null,
     playlistServerModified: dropboxPlaylistMeta.serverModified || null,
     perListMeta: dropboxPerListMeta,
@@ -2065,6 +2096,15 @@ function loadLocalPlaylist() {
       if (pageSizeSelect) pageSizeSelect.value = String(state.viewPageSize || 0);
     } else if (pageSizeSelect) {
       pageSizeSelect.value = '0';
+    }
+    if (Number.isFinite(data?.playbackRate)) {
+      state.playbackRate = Number(data.playbackRate) || 1;
+      if (speedSlider) speedSlider.value = String(state.playbackRate);
+    } else if (speedSlider) {
+      speedSlider.value = '1';
+    }
+    if (speedValue) {
+      speedValue.textContent = (state.playbackRate.toFixed(2).replace(/\.00$/, '')) + '×';
     }
   } catch (error) {
     console.warn('No se pudo leer la lista local', error);
@@ -2604,6 +2644,7 @@ async function saveDropboxPlaylist(token) {
     shuffle: state.shuffle,
     uploadOnPlayOnly: state.uploadOnPlayOnly,
     downloadOnPlayOnly: state.downloadOnPlayOnly,
+    playbackRate: state.playbackRate,
     playlists: state.playlists.map(playlist => ({
       id: playlist.id,
       name: playlist.name,
@@ -2842,6 +2883,11 @@ async function pullDropboxPlaylist(token) {
       }
       if (typeof json.shuffle === 'boolean') {
         state.shuffle = json.shuffle;
+      }
+      if (Number.isFinite(json.playbackRate)) {
+        state.playbackRate = Number(json.playbackRate) || 1;
+        if (speedSlider) speedSlider.value = String(state.playbackRate);
+        if (speedValue) speedValue.textContent = (state.playbackRate.toFixed(2).replace(/\.00$/, '')) + '×';
       }
       if (typeof json.uploadOnPlayOnly === 'boolean') {
         state.uploadOnPlayOnly = json.uploadOnPlayOnly;
@@ -3351,6 +3397,17 @@ function updateCoverArtDisplay(track) {
   nowPlayingRowEl?.classList.add('has-cover');
 }
 
+function openCoverLightbox(src) {
+  if (!coverLightboxEl || !coverLightboxImg) return;
+  coverLightboxImg.src = src || coverArtImg?.src || '';
+  coverLightboxEl.hidden = false;
+}
+
+function closeCoverLightbox() {
+  if (!coverLightboxEl) return;
+  coverLightboxEl.hidden = true;
+}
+
 function formatBytes(n) {
   if (!Number.isFinite(n) || n <= 0) return '0 B';
   const units = ['B', 'KB', 'MB', 'GB', 'TB'];
@@ -3426,6 +3483,19 @@ function updatePagerUI() {
   pagerEl.hidden = false;
 }
 
+function updateSpeedUI() {
+  const rate = Number(state.playbackRate) || 1;
+  if (speedSlider && String(speedSlider.value) !== String(rate)) {
+    speedSlider.value = String(rate);
+  }
+  if (speedValue) {
+    const txt = rate.toFixed(2).replace(/\.00$/, '') + '×';
+    speedValue.textContent = txt;
+  }
+  // aplicar a players activos por si no estaban sincronizados
+  players.forEach(p => { try { p.audio.playbackRate = rate; } catch {} });
+}
+
 async function initialize() {
   loadLocalPlaylist();
   await restoreLocalMedia();
@@ -3439,6 +3509,16 @@ async function initialize() {
     performDropboxSync({ loadRemote: true }).catch(console.error);
   }
   scheduleStorageStatsUpdate(0);
+  updateSpeedUI();
+  // Lightbox handlers
+  coverArtImg?.addEventListener('click', () => {
+    if (!coverArtImg.src) return;
+    openCoverLightbox(coverArtImg.src);
+  });
+  coverLightboxEl?.addEventListener('click', () => closeCoverLightbox());
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeCoverLightbox();
+  });
 }
 
 handleDropboxRedirect().catch(console.error).finally(() => {
@@ -3638,6 +3718,7 @@ async function saveDropboxSettings(token) {
     uploadOnPlayOnly: state.uploadOnPlayOnly,
     downloadOnPlayOnly: state.downloadOnPlayOnly,
     preferLocalSource: state.preferLocalSource,
+    playbackRate: state.playbackRate,
   };
   const body = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
   const response = await fetch('https://content.dropboxapi.com/2/files/upload', {
@@ -3683,5 +3764,6 @@ async function pullDropboxSettings(token) {
   if (typeof json.uploadOnPlayOnly === 'boolean') { state.uploadOnPlayOnly = json.uploadOnPlayOnly; if (uploadOnPlayOnlyToggle) uploadOnPlayOnlyToggle.checked = state.uploadOnPlayOnly; }
   if (typeof json.downloadOnPlayOnly === 'boolean') { state.downloadOnPlayOnly = json.downloadOnPlayOnly; if (downloadOnPlayOnlyToggle) downloadOnPlayOnlyToggle.checked = state.downloadOnPlayOnly; }
   if (typeof json.preferLocalSource === 'boolean') { state.preferLocalSource = json.preferLocalSource; if (preferLocalSourceToggle) preferLocalSourceToggle.checked = state.preferLocalSource; }
+  if (Number.isFinite(json.playbackRate)) { state.playbackRate = Number(json.playbackRate) || 1; if (speedSlider) speedSlider.value = String(state.playbackRate); if (speedValue) speedValue.textContent = (state.playbackRate.toFixed(2).replace(/\.00$/, '')) + '×'; }
   persistLocalPlaylist();
 }

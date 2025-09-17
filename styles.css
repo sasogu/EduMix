@@ -284,6 +284,7 @@ button.ghost:not(:disabled):hover {
   box-shadow: 0 4px 12px rgba(74, 144, 226, 0.15);
   background: rgba(74, 144, 226, 0.08);
   transition: width 0.25s ease, height 0.25s ease, box-shadow 0.25s ease, transform 0.25s ease;
+  cursor: zoom-in;
 }
 
 /* Dar protagonismo a la carátula cuando existe */
@@ -303,6 +304,25 @@ button.ghost:not(:disabled):hover {
     width: 104px;
     height: 104px;
   }
+}
+
+/* Lightbox para carátula ampliada */
+.lightbox[hidden] { display: none; }
+.lightbox {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.85);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+  backdrop-filter: blur(2px);
+}
+.lightbox img {
+  max-width: 92vw;
+  max-height: 92vh;
+  border-radius: 0.8rem;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.5);
 }
 
 .fade-control {
