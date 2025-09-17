@@ -60,6 +60,10 @@ const dropboxState = {
   lastSync: null,
   error: null,
 };
+dropboxState.progressTotal = 0;
+dropboxState.progressDone = 0;
+// Ventana global para evitar saturar el límite de escrituras de Dropbox
+let dropboxWriteAvailableAt = 0;
 
 const waveformState = {
   trackId: null,
@@ -1452,6 +1456,16 @@ function renderPlaylist() {
     } else {
       meta.textContent = track.fileName;
     }
+    if (track._sync) {
+      const status = document.createElement('span');
+      status.className = 'badge';
+      const label = track._sync === 'queued' ? 'En cola…' : (track._sync === 'uploading' ? 'Subiendo…' : (track._sync === 'error' ? 'Error' : ''));
+      if (label) {
+        status.textContent = label;
+        status.style.marginLeft = '0.5rem';
+        meta.append(' ', status);
+      }
+    }
     title.append(name, meta);
 
     const actions = document.createElement('div');
@@ -1608,7 +1622,11 @@ function updateDropboxUI() {
     dropboxStatusEl.classList.add('is-error');
     cloudSyncCard.classList.add('is-error');
   } else {
-    dropboxStatusEl.textContent = dropboxState.isSyncing ? 'Sincronizando…' : 'Conectado';
+    if (dropboxState.isSyncing && dropboxState.progressTotal > 0) {
+      dropboxStatusEl.textContent = `Sincronizando… ${Math.min(dropboxState.progressDone, dropboxState.progressTotal)}/${dropboxState.progressTotal}`;
+    } else {
+      dropboxStatusEl.textContent = dropboxState.isSyncing ? 'Sincronizando…' : 'Conectado';
+    }
     dropboxStatusEl.classList.remove('is-error');
     cloudSyncCard.classList.remove('is-error');
   }
@@ -1760,6 +1778,13 @@ async function performDropboxSync(options = {}) {
   }
   dropboxState.isSyncing = true;
   dropboxState.error = null;
+  // preparar progreso
+  const candidates = getAllTracks().filter(track => !track.dropboxPath);
+  dropboxState.progressTotal = candidates.length;
+  dropboxState.progressDone = 0;
+  // marcar en cola
+  candidates.forEach(t => { t._sync = 'queued'; });
+  renderPlaylist();
   updateDropboxUI();
   try {
     const token = await ensureDropboxToken();
@@ -1769,7 +1794,7 @@ async function performDropboxSync(options = {}) {
     if (effective.loadRemote) {
       await pullDropboxPlaylist(token);
     }
-    await uploadPendingTracks(token);
+    await uploadPendingTracks(token, candidates);
     await processPendingDeletions(token);
     await saveDropboxPlaylist(token);
     dropboxState.lastSync = Date.now();
@@ -1779,6 +1804,9 @@ async function performDropboxSync(options = {}) {
     showDropboxError('No se pudo sincronizar con Dropbox.');
   } finally {
     dropboxState.isSyncing = false;
+    dropboxState.progressTotal = 0;
+    dropboxState.progressDone = 0;
+    getAllTracks().forEach(t => { if (t._sync) delete t._sync; });
     updateDropboxUI();
     const queued = dropboxState.syncQueued;
     dropboxState.syncQueued = null;
@@ -1790,6 +1818,14 @@ async function performDropboxSync(options = {}) {
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function awaitDropboxWriteWindow(minDelayMs = 0) {
+  const now = Date.now();
+  const waitMs = Math.max(0, dropboxWriteAvailableAt - now, minDelayMs);
+  if (waitMs > 0) {
+    await sleep(waitMs + Math.random() * 120);
+  }
 }
 
 function parseDropboxRetryInfo(status, headers, bodyText) {
@@ -1849,6 +1885,7 @@ async function uploadOneTrackWithRetry(token, track) {
   let attempt = 0;
   while (attempt <= maxRetries) {
     try {
+      await awaitDropboxWriteWindow();
       const response = await fetch('https://content.dropboxapi.com/2/files/upload', {
         method: 'POST',
         headers: {
@@ -1868,6 +1905,7 @@ async function uploadOneTrackWithRetry(token, track) {
         const textResponse = await response.text();
         const retrySeconds = parseDropboxRetryInfo(response.status, response.headers, textResponse);
         if (retrySeconds && attempt < maxRetries) {
+          dropboxWriteAvailableAt = Date.now() + retrySeconds * 1000;
           const jitter = Math.random() * 250;
           await sleep(retrySeconds * 1000 + jitter);
           attempt += 1;
@@ -1889,6 +1927,7 @@ async function uploadOneTrackWithRetry(token, track) {
     } catch (error) {
       if (attempt >= maxRetries) {
         console.error(`No se pudo subir ${track.fileName}`, error);
+        track._sync = 'error';
         showDropboxError(`Error subiendo ${track.fileName}.`);
         return;
       }
@@ -1900,11 +1939,11 @@ async function uploadOneTrackWithRetry(token, track) {
   }
 }
 
-async function uploadPendingTracks(token) {
-  const candidates = getAllTracks().filter(track => !track.dropboxPath);
+async function uploadPendingTracks(token, list) {
+  const candidates = Array.isArray(list) ? list : getAllTracks().filter(track => !track.dropboxPath);
   if (!candidates.length) return;
 
-  const CONCURRENCY = 2;
+  const CONCURRENCY = 1;
   let index = 0;
   const worker = async () => {
     while (true) {
@@ -1912,7 +1951,17 @@ async function uploadPendingTracks(token) {
       index += 1;
       const track = candidates[i];
       if (!track) break;
+      track._sync = 'uploading';
+      renderPlaylist();
       await uploadOneTrackWithRetry(token, track);
+      dropboxState.progressDone += 1;
+      if (track.dropboxPath) {
+        track._sync = 'done';
+      } else {
+        track._sync = track._sync || null;
+      }
+      updateDropboxUI();
+      renderPlaylist();
     }
   };
   const workers = Array.from({ length: Math.min(CONCURRENCY, candidates.length) }, () => worker());
@@ -1937,6 +1986,7 @@ async function saveDropboxPlaylist(token) {
   let attempt = 0;
   while (attempt <= maxRetries) {
     try {
+      await awaitDropboxWriteWindow();
       const response = await fetch('https://content.dropboxapi.com/2/files/upload', {
         method: 'POST',
         headers: {
@@ -1955,6 +2005,7 @@ async function saveDropboxPlaylist(token) {
         const text = await response.text();
         const retrySeconds = parseDropboxRetryInfo(response.status, response.headers, text);
         if (retrySeconds && attempt < maxRetries) {
+          dropboxWriteAvailableAt = Date.now() + retrySeconds * 1000;
           await sleep(retrySeconds * 1000 + Math.random() * 250);
           attempt += 1;
           continue;
@@ -2156,26 +2207,43 @@ async function processPendingDeletions(token) {
     return;
   }
   const deletions = Array.from(pendingDeletions);
-  const promises = deletions.map(path => (
-    fetch('https://api.dropboxapi.com/2/files/delete_v2', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ path }),
-    })
-      .then(response => {
+  for (const path of deletions) {
+    let attempt = 0;
+    const maxRetries = 5;
+    while (attempt <= maxRetries) {
+      try {
+        await awaitDropboxWriteWindow();
+        const response = await fetch('https://api.dropboxapi.com/2/files/delete_v2', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ path }),
+        });
         if (!response.ok && response.status !== 409) {
+          const text = await response.text().catch(() => '');
+          const retrySeconds = parseDropboxRetryInfo(response.status, response.headers, text);
+          if (retrySeconds && attempt < maxRetries) {
+            dropboxWriteAvailableAt = Date.now() + retrySeconds * 1000;
+            await sleep(retrySeconds * 1000 + Math.random() * 250);
+            attempt += 1;
+            continue;
+          }
           throw new Error('Delete failed');
         }
         pendingDeletions.delete(path);
-      })
-      .catch(error => {
-        console.error('No se pudo eliminar archivo en Dropbox', error);
-      })
-  ));
-  await Promise.all(promises);
+        break;
+      } catch (error) {
+        if (attempt >= maxRetries) {
+          console.error('No se pudo eliminar archivo en Dropbox', error);
+          break;
+        }
+        await sleep(Math.min(16000, 1000 * Math.pow(2, attempt)) + Math.random() * 300);
+        attempt += 1;
+      }
+    }
+  }
   persistLocalPlaylist();
 }
 
