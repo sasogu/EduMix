@@ -988,6 +988,15 @@ dropboxDisconnectBtn?.addEventListener('click', () => {
   disconnectDropbox();
 });
 
+dropboxRetryFailedBtn?.addEventListener('click', () => {
+  if (dropboxState.isSyncing) return;
+  const failed = getAllTracks().filter(t => !t.dropboxPath && t._sync === 'error');
+  if (!failed.length) return;
+  failed.forEach(t => { t._sync = 'queued'; });
+  renderPlaylist();
+  performDropboxSync({ loadRemote: false, onlyTrackIds: failed.map(t => t.id) }).catch(console.error);
+});
+
 function addTracks(files) {
   const audioFiles = files
     .filter(file => file.type.startsWith('audio/'))
@@ -1613,6 +1622,9 @@ function updateDropboxUI() {
     dropboxStatusEl.classList.remove('is-error');
     dropboxSyncBtn.hidden = true;
     dropboxDisconnectBtn.hidden = true;
+    if (dropboxRetryFailedBtn) {
+      dropboxRetryFailedBtn.hidden = true;
+    }
     dropboxConnectBtn.hidden = false;
     cloudSyncCard.classList.remove('is-syncing', 'is-error');
     return;
@@ -1636,6 +1648,11 @@ function updateDropboxUI() {
   dropboxDisconnectBtn.hidden = false;
   dropboxSyncBtn.disabled = dropboxState.isSyncing;
   dropboxDisconnectBtn.disabled = dropboxState.isSyncing;
+  if (dropboxRetryFailedBtn) {
+    const hasFailed = hasFailedUploads();
+    dropboxRetryFailedBtn.hidden = !hasFailed;
+    dropboxRetryFailedBtn.disabled = dropboxState.isSyncing || !hasFailed;
+  }
 }
 
 function showDropboxError(message) {
@@ -1646,6 +1663,10 @@ function showDropboxError(message) {
   if (cloudSyncCard) {
     cloudSyncCard.classList.add('is-error');
   }
+}
+
+function hasFailedUploads() {
+  return getAllTracks().some(t => !t.dropboxPath && t._sync === 'error');
 }
 
 async function beginDropboxAuth() {
@@ -1769,17 +1790,21 @@ async function performDropboxSync(options = {}) {
   }
   const effective = {
     loadRemote: Boolean(options.loadRemote),
+    onlyTrackIds: Array.isArray(options.onlyTrackIds) ? options.onlyTrackIds.slice() : null,
   };
   if (dropboxState.isSyncing) {
+    const queuedIds = new Set([...(dropboxState.syncQueued?.onlyTrackIds || []), ...(effective.onlyTrackIds || [])]);
     dropboxState.syncQueued = {
       loadRemote: effective.loadRemote || Boolean(dropboxState?.syncQueued?.loadRemote),
+      onlyTrackIds: Array.from(queuedIds),
     };
     return;
   }
   dropboxState.isSyncing = true;
   dropboxState.error = null;
   // preparar progreso
-  const candidates = getAllTracks().filter(track => !track.dropboxPath);
+  const baseCandidates = getAllTracks().filter(track => !track.dropboxPath);
+  const candidates = effective.onlyTrackIds ? baseCandidates.filter(t => effective.onlyTrackIds.includes(t.id)) : baseCandidates;
   dropboxState.progressTotal = candidates.length;
   dropboxState.progressDone = 0;
   // marcar en cola
@@ -1806,7 +1831,7 @@ async function performDropboxSync(options = {}) {
     dropboxState.isSyncing = false;
     dropboxState.progressTotal = 0;
     dropboxState.progressDone = 0;
-    getAllTracks().forEach(t => { if (t._sync) delete t._sync; });
+    getAllTracks().forEach(t => { if (t._sync && t._sync !== 'error') delete t._sync; });
     updateDropboxUI();
     const queued = dropboxState.syncQueued;
     dropboxState.syncQueued = null;
@@ -1954,8 +1979,8 @@ async function uploadPendingTracks(token, list) {
       track._sync = 'uploading';
       renderPlaylist();
       await uploadOneTrackWithRetry(token, track);
-      dropboxState.progressDone += 1;
       if (track.dropboxPath) {
+        dropboxState.progressDone += 1;
         track._sync = 'done';
       } else {
         track._sync = track._sync || null;
