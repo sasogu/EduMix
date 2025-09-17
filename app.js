@@ -1137,7 +1137,8 @@ speedSlider?.addEventListener('change', () => {
   updateSpeedUI();
 });
 
-speedResetBtn?.addEventListener('click', () => {
+speedResetBtn?.addEventListener('click', (e) => {
+  e.preventDefault();
   state.playbackRate = 1;
   updateSpeedUI();
   persistLocalPlaylist();
@@ -2192,13 +2193,8 @@ function loadLocalPlaylist() {
     }
     if (Number.isFinite(data?.playbackRate)) {
       state.playbackRate = Number(data.playbackRate) || 1;
-      if (speedSlider) speedSlider.value = String(state.playbackRate);
-    } else if (speedSlider) {
-      speedSlider.value = '1';
     }
-    if (speedValue) {
-      speedValue.textContent = (state.playbackRate.toFixed(2).replace(/\.00$/, '')) + '×';
-    }
+    updateSpeedUI();
   } catch (error) {
     console.warn('No se pudo leer la lista local', error);
     ensurePlaylistsInitialized();
@@ -2982,8 +2978,7 @@ async function pullDropboxPlaylist(token) {
       }
       if (Number.isFinite(json.playbackRate)) {
         state.playbackRate = Number(json.playbackRate) || 1;
-        if (speedSlider) speedSlider.value = String(state.playbackRate);
-        if (speedValue) speedValue.textContent = (state.playbackRate.toFixed(2).replace(/\.00$/, '')) + '×';
+        updateSpeedUI();
       }
       if (typeof json.uploadOnPlayOnly === 'boolean') {
         state.uploadOnPlayOnly = json.uploadOnPlayOnly;
@@ -3588,7 +3583,7 @@ function updateSpeedUI() {
     speedSlider.value = String(rate);
   }
   if (speedValue) {
-    const txt = rate.toFixed(1).replace(/\.0$/, '') + '×';
+    const txt = rate.toFixed(2).replace(/\.00$/, '').replace(/(\.\d)0$/, '$1') + '×';
     speedValue.textContent = txt;
   }
   // aplicar a players activos por si no estaban sincronizados
@@ -3864,6 +3859,6 @@ async function pullDropboxSettings(token) {
   if (typeof json.uploadOnPlayOnly === 'boolean') { state.uploadOnPlayOnly = json.uploadOnPlayOnly; if (uploadOnPlayOnlyToggle) uploadOnPlayOnlyToggle.checked = state.uploadOnPlayOnly; }
   if (typeof json.downloadOnPlayOnly === 'boolean') { state.downloadOnPlayOnly = json.downloadOnPlayOnly; if (downloadOnPlayOnlyToggle) downloadOnPlayOnlyToggle.checked = state.downloadOnPlayOnly; }
   if (typeof json.preferLocalSource === 'boolean') { state.preferLocalSource = json.preferLocalSource; if (preferLocalSourceToggle) preferLocalSourceToggle.checked = state.preferLocalSource; }
-  if (Number.isFinite(json.playbackRate)) { state.playbackRate = Number(json.playbackRate) || 1; if (speedSlider) speedSlider.value = String(state.playbackRate); if (speedValue) speedValue.textContent = (state.playbackRate.toFixed(2).replace(/\.00$/, '')) + '×'; }
+  if (Number.isFinite(json.playbackRate)) { state.playbackRate = Number(json.playbackRate) || 1; updateSpeedUI(); }
   persistLocalPlaylist();
 }
