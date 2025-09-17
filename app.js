@@ -20,6 +20,7 @@ const dropboxSyncBtn = document.getElementById('dropboxSync');
 const dropboxDisconnectBtn = document.getElementById('dropboxDisconnect');
 const uploadOnPlayOnlyToggle = document.getElementById('uploadOnPlayOnly');
 const downloadOnPlayOnlyToggle = document.getElementById('downloadOnPlayOnly');
+const preferLocalSourceToggle = document.getElementById('preferLocalSource');
 // Declarado para evitar ReferenceError en usos con optional chaining
 const dropboxRetryFailedBtn = document.getElementById('dropboxRetryFailed');
 const cloudSyncCard = document.querySelector('.cloud-sync');
@@ -57,6 +58,7 @@ const state = {
   shuffle: false,
   uploadOnPlayOnly: false,
   downloadOnPlayOnly: false,
+  preferLocalSource: true,
 };
 
 // Estado de reproducción aleatoria
@@ -1242,6 +1244,11 @@ downloadOnPlayOnlyToggle?.addEventListener('change', () => {
   persistLocalPlaylist();
 });
 
+preferLocalSourceToggle?.addEventListener('change', () => {
+  state.preferLocalSource = !!preferLocalSourceToggle.checked;
+  persistLocalPlaylist();
+});
+
 dropboxRetryFailedBtn?.addEventListener('click', () => {
   if (dropboxState.isSyncing) return;
   const failed = getAllTracks().filter(t => !t.dropboxPath && t._sync === 'error');
@@ -1501,14 +1508,22 @@ async function playTrack(index, options = {}) {
 
   await ensureContextRunning();
 
-  let ready = true;
-  if (track.dropboxPath) {
-    ready = await ensureTrackRemoteLink(track);
-    if (!ready) {
-      ready = await ensureLocalTrackUrl(track);
+  // Selección de fuente según preferencia
+  let ready = false;
+  if (state.preferLocalSource) {
+    ready = await ensureLocalTrackUrl(track);
+    if (!ready && track.dropboxPath) {
+      ready = await ensureTrackRemoteLink(track);
     }
   } else {
-    ready = await ensureLocalTrackUrl(track);
+    if (track.dropboxPath) {
+      ready = await ensureTrackRemoteLink(track);
+      if (!ready) {
+        ready = await ensureLocalTrackUrl(track);
+      }
+    } else {
+      ready = await ensureLocalTrackUrl(track);
+    }
   }
   if (!ready) {
     if (waveformContainer) {
@@ -1528,7 +1543,11 @@ async function playTrack(index, options = {}) {
         waveformMessage.textContent = 'Audio local no disponible. Vuelve a importarlo.';
       }
     } else {
-      showDropboxError('No se pudo obtener el audio desde Dropbox.');
+      // No bloquear: intenta forzar lectura local si existe
+      const fallback = await ensureLocalTrackUrl(track);
+      if (!fallback) {
+        showDropboxError('No se pudo obtener el audio desde Dropbox.');
+      }
     }
     return;
   }
@@ -1888,6 +1907,7 @@ function persistLocalPlaylist() {
     shuffle: state.shuffle,
     uploadOnPlayOnly: state.uploadOnPlayOnly,
     downloadOnPlayOnly: state.downloadOnPlayOnly,
+    preferLocalSource: state.preferLocalSource,
     playlistRev: dropboxPlaylistMeta.rev || null,
     playlistServerModified: dropboxPlaylistMeta.serverModified || null,
     perListMeta: dropboxPerListMeta,
@@ -1944,6 +1964,14 @@ function loadLocalPlaylist() {
       }
     } else if (downloadOnPlayOnlyToggle) {
       downloadOnPlayOnlyToggle.checked = false;
+    }
+    if (typeof data?.preferLocalSource === 'boolean') {
+      state.preferLocalSource = data.preferLocalSource;
+      if (preferLocalSourceToggle) {
+        preferLocalSourceToggle.checked = state.preferLocalSource;
+      }
+    } else if (preferLocalSourceToggle) {
+      preferLocalSourceToggle.checked = true;
     }
     if (Array.isArray(data?.playlists)) {
       state.playlists = data.playlists.map(playlist => ({
@@ -3469,6 +3497,7 @@ async function saveDropboxSettings(token) {
     shuffle: state.shuffle,
     uploadOnPlayOnly: state.uploadOnPlayOnly,
     downloadOnPlayOnly: state.downloadOnPlayOnly,
+    preferLocalSource: state.preferLocalSource,
   };
   const body = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
   const response = await fetch('https://content.dropboxapi.com/2/files/upload', {
@@ -3513,5 +3542,6 @@ async function pullDropboxSettings(token) {
   if (typeof json.shuffle === 'boolean') state.shuffle = json.shuffle;
   if (typeof json.uploadOnPlayOnly === 'boolean') { state.uploadOnPlayOnly = json.uploadOnPlayOnly; if (uploadOnPlayOnlyToggle) uploadOnPlayOnlyToggle.checked = state.uploadOnPlayOnly; }
   if (typeof json.downloadOnPlayOnly === 'boolean') { state.downloadOnPlayOnly = json.downloadOnPlayOnly; if (downloadOnPlayOnlyToggle) downloadOnPlayOnlyToggle.checked = state.downloadOnPlayOnly; }
+  if (typeof json.preferLocalSource === 'boolean') { state.preferLocalSource = json.preferLocalSource; if (preferLocalSourceToggle) preferLocalSourceToggle.checked = state.preferLocalSource; }
   persistLocalPlaylist();
 }
