@@ -26,6 +26,7 @@ const cloudSyncCard = document.querySelector('.cloud-sync');
 const waveformCanvas = document.getElementById('waveformCanvas');
 const waveformMessage = document.getElementById('waveformMessage');
 const waveformContainer = document.querySelector('.waveform');
+const coverArtImg = document.getElementById('coverArt');
 
 const STORAGE_KEYS = {
   playlist: 'edumix-playlist',
@@ -1014,6 +1015,10 @@ clearPlaylistBtn?.addEventListener('click', () => {
     if (!track.isRemote && track.url) {
       URL.revokeObjectURL(track.url);
     }
+    if (track.coverUrl) {
+      try { URL.revokeObjectURL(track.coverUrl); } catch {}
+      track.coverUrl = null;
+    }
     deleteTrackFile(track.id).catch(console.error);
   });
   state.tracks.splice(0, state.tracks.length);
@@ -1325,6 +1330,10 @@ function removeTrack(index) {
   }
   pendingUploads.delete(track.id);
   waveformCache.delete(track.id);
+  if (track.coverUrl) {
+    try { URL.revokeObjectURL(track.coverUrl); } catch {}
+    track.coverUrl = null;
+  }
   deleteTrackFile(track.id).catch(console.error);
   if (track.dropboxPath) {
     pendingDeletions.add(track.dropboxPath);
@@ -1552,6 +1561,12 @@ async function playTrack(index, options = {}) {
   }
   nextPlayer.audio.currentTime = 0;
   nextPlayer.trackId = track.id;
+  // Intentar extraer carátula si no la tenemos aún
+  if (!track.coverUrl) {
+    ensureCoverArt(track).catch(() => {});
+  } else {
+    updateCoverArtDisplay(track);
+  }
 
   let playError = null;
   for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -1660,6 +1675,7 @@ function stopPlayback() {
   state.currentIndex = -1;
   state.isPlaying = false;
   updateNowPlaying();
+  updateCoverArtDisplay(null);
   renderPlaylist();
   updateControls();
   setWaveformTrack(null);
@@ -1669,10 +1685,14 @@ function updateNowPlaying() {
   const track = state.tracks[state.currentIndex];
   if (!track) {
     nowPlayingEl.textContent = 'Ninguna pista seleccionada';
+    updateCoverArtDisplay(null);
     return;
   }
   const duration = track.duration ? ` · ${formatDuration(track.duration)}` : '';
   nowPlayingEl.textContent = `${track.name}${duration}`;
+  if (track.coverUrl) {
+    updateCoverArtDisplay(track);
+  }
 }
 
 function syncLoopToggle() {
@@ -1728,6 +1748,7 @@ function renderPlaylist() {
     item.className = 'track';
     item.draggable = true;
     item.dataset.index = String(index);
+    item.dataset.trackId = track.id;
     if (index === state.currentIndex) {
       item.classList.add('is-playing');
     }
@@ -1739,6 +1760,12 @@ function renderPlaylist() {
     handle.className = 'track-handle';
     handle.textContent = '☰';
     handle.title = 'Arrastra para reordenar';
+
+    const thumb = document.createElement('img');
+    thumb.className = 'track-thumb';
+    thumb.alt = 'Carátula';
+    thumb.src = track.coverUrl || getPlaceholderCover(48);
+    thumb.hidden = false;
 
     const title = document.createElement('div');
     title.className = 'track-title';
@@ -1821,8 +1848,18 @@ function renderPlaylist() {
     removeButton.dataset.index = String(index);
 
     actions.append(playButton, renameButton, removeButton);
-    item.append(handle, title, actions);
+    item.append(handle, thumb, title, actions);
     playlistEl.append(item);
+
+    // Intento de generar miniatura para pistas locales (sin red) si no existe aún
+    if (!track.coverUrl) {
+      const hasLocal = pendingUploads.has(track.id);
+      if (hasLocal || !track.isRemote) {
+        ensureCoverArt(track)
+          .then(changed => { if (changed) updateTrackThumbnails(track); })
+          .catch(() => {});
+      }
+    }
   });
 }
 
@@ -3070,6 +3107,156 @@ function sanitizeFileName(name) {
 function getPlaylistPath(playlist) {
   const file = sanitizeFileName(playlist.name || 'Lista');
   return `${dropboxConfig.playlistsDir}/${file}`;
+}
+
+// ========== Cover art (ID3 APIC) ==========
+function getPlaceholderCover(size = 72) {
+  const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='${size}' height='${size}' viewBox='0 0 ${size} ${size}'>\n<defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'><stop offset='0' stop-color='#dbeafe'/><stop offset='1' stop-color='#bfdbfe'/></linearGradient></defs>\n<rect width='100%' height='100%' rx='${Math.max(4, Math.floor(size*0.1))}' fill='url(#g)'/>\n<text x='50%' y='50%' dominant-baseline='middle' text-anchor='middle' font-size='${Math.floor(size*0.55)}' fill='#4a90e2' font-family='Segoe UI, Roboto, Helvetica, Arial, sans-serif'>♪</text>\n</svg>`;
+  return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
+}
+function readSynchsafeInt(bytes, offset) {
+  return (
+    (bytes[offset] & 0x7f) << 21 |
+    (bytes[offset + 1] & 0x7f) << 14 |
+    (bytes[offset + 2] & 0x7f) << 7 |
+    (bytes[offset + 3] & 0x7f)
+  );
+}
+
+function readUInt32BE(bytes, offset) {
+  return (bytes[offset] << 24) | (bytes[offset + 1] << 16) | (bytes[offset + 2] << 8) | (bytes[offset + 3]);
+}
+
+function readUntilNull(bytes, offset, encodingByte) {
+  // encoding 0/3: ISO-8859-1/UTF-8 null-terminated with 0x00
+  // encoding 1/2: UTF-16 with BOM/BE, null as 0x00 0x00 (we skip properly by searching for double zero)
+  if (encodingByte === 1 || encodingByte === 2) {
+    for (let i = offset; i + 1 < bytes.length; i += 2) {
+      if (bytes[i] === 0 && bytes[i + 1] === 0) {
+        return { end: i + 2 };
+      }
+    }
+    return { end: bytes.length };
+  }
+  for (let i = offset; i < bytes.length; i += 1) {
+    if (bytes[i] === 0) return { end: i + 1 };
+  }
+  return { end: bytes.length };
+}
+
+function extractCoverArtFromArrayBuffer(arrayBuffer) {
+  try {
+    const bytes = new Uint8Array(arrayBuffer);
+    if (bytes.length < 10) return null;
+    // ID3v2 at start
+    if (bytes[0] !== 0x49 || bytes[1] !== 0x44 || bytes[2] !== 0x33) {
+      // Try ID3v2.2 'PIC' or skip
+      return null;
+    }
+    const ver = bytes[3]; // 3 for v2.3, 4 for v2.4
+    const flags = bytes[5];
+    const tagSize = readSynchsafeInt(bytes, 6) + 10;
+    let offset = 10;
+    if (flags & 0x40) {
+      // Extended header present
+      if (ver === 4) {
+        const extSize = readSynchsafeInt(bytes, offset);
+        offset += 4 + extSize;
+      } else {
+        const extSize = readUInt32BE(bytes, offset);
+        offset += 4 + extSize;
+      }
+    }
+    while (offset + 10 <= bytes.length && offset < tagSize) {
+      const frameId = String.fromCharCode(bytes[offset], bytes[offset + 1], bytes[offset + 2], bytes[offset + 3]);
+      let frameSize = ver === 4 ? readSynchsafeInt(bytes, offset + 4) : readUInt32BE(bytes, offset + 4);
+      const frameFlags = (bytes[offset + 8] << 8) | bytes[offset + 9];
+      offset += 10;
+      if (!frameId.trim() || frameSize <= 0) break;
+      if (offset + frameSize > bytes.length) break;
+      if (frameId === 'APIC') {
+        const enc = bytes[offset];
+        let i = offset + 1;
+        // MIME type null-terminated
+        const mimeEnd = readUntilNull(bytes, i, 0).end; // MIME is ISO-8859-1
+        const mime = new TextDecoder('iso-8859-1', { fatal: false }).decode(bytes.slice(i, mimeEnd - 1)) || 'image/jpeg';
+        i = mimeEnd;
+        // Picture type
+        const picType = bytes[i];
+        i += 1;
+        // Description (encoding dependent)
+        const descEnd = readUntilNull(bytes, i, enc).end;
+        i = descEnd;
+        // The rest is image data
+        const imgBytes = bytes.slice(i, offset + frameSize);
+        const blob = new Blob([imgBytes], { type: mime || 'image/jpeg' });
+        return { mimeType: blob.type, blob };
+      }
+      offset += frameSize;
+    }
+  } catch (e) {
+    // ignore parsing errors
+  }
+  return null;
+}
+
+async function ensureCoverArt(track) {
+  try {
+    if (!track || track.coverUrl) return false;
+    let buffer = null;
+    const file = pendingUploads.get(track.id);
+    if (file) {
+      buffer = await file.arrayBuffer();
+    } else {
+      const stored = await loadTrackFile(track.id);
+      if (stored?.buffer) {
+        buffer = stored.buffer;
+      } else if ((track.isRemote || track.dropboxPath)) {
+        if (state.downloadOnPlayOnly && !track._hasPlayed) return false;
+        const ready = await ensureTrackRemoteLink(track);
+        if (!ready) return false;
+        // Prefer leer de IDB para no volver a descargar
+        const again = await loadTrackFile(track.id);
+        if (again?.buffer) buffer = again.buffer;
+        if (!buffer && track.url) {
+          const resp = await fetch(track.url);
+          if (resp.ok) buffer = await resp.arrayBuffer();
+        }
+      } else if (track.url && track.url.startsWith('blob:')) {
+        try { const resp = await fetch(track.url); if (resp.ok) buffer = await resp.arrayBuffer(); } catch {}
+      }
+    }
+    if (!buffer) return false;
+    const art = extractCoverArtFromArrayBuffer(buffer);
+    if (!art || !art.blob) return false;
+    if (track.coverUrl) { try { URL.revokeObjectURL(track.coverUrl); } catch {} }
+    track.coverUrl = URL.createObjectURL(art.blob);
+    updateCoverArtDisplay(track);
+    updateTrackThumbnails(track);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function updateCoverArtDisplay(track) {
+  if (!coverArtImg) return;
+  if (!track || !track.coverUrl) {
+    coverArtImg.src = getPlaceholderCover(72);
+    coverArtImg.hidden = false;
+    return;
+  }
+  coverArtImg.src = track.coverUrl;
+  coverArtImg.hidden = false;
+}
+
+function updateTrackThumbnails(track) {
+  if (!track || !track.coverUrl || !playlistEl) return;
+  const nodes = playlistEl.querySelectorAll(`li.track[data-track-id="${track.id}"] img.track-thumb`);
+  nodes.forEach(img => {
+    img.src = track.coverUrl || getPlaceholderCover(48);
+    img.hidden = false;
+  });
 }
 
 async function initialize() {

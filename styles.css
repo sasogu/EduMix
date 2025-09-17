@@ -145,7 +145,7 @@ button.ghost:not(:disabled):hover {
 
 .track {
   display: grid;
-  grid-template-columns: auto 1fr auto;
+  grid-template-columns: auto auto 1fr auto;
   gap: 0.75rem;
   align-items: center;
   padding: 0.8rem 1rem;
@@ -186,6 +186,16 @@ button.ghost:not(:disabled):hover {
   flex-direction: column;
   gap: 0.2rem;
   min-width: 0;
+}
+
+.track-thumb {
+  width: 48px;
+  height: 48px;
+  border-radius: 0.5rem;
+  object-fit: cover;
+  border: 1px solid rgba(74, 144, 226, 0.2);
+  background: rgba(74, 144, 226, 0.08);
+  box-shadow: 0 3px 8px rgba(74, 144, 226, 0.12);
 }
 
 .track-title strong {
@@ -243,6 +253,23 @@ button.ghost:not(:disabled):hover {
   justify-content: center;
   gap: 1rem;
   margin: 1rem 0 0.5rem;
+}
+
+.now-playing-row {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.9rem;
+  align-items: center;
+}
+
+.cover-art {
+  width: 72px;
+  height: 72px;
+  border-radius: 0.6rem;
+  object-fit: cover;
+  border: 1px solid rgba(74, 144, 226, 0.25);
+  box-shadow: 0 4px 12px rgba(74, 144, 226, 0.15);
+  background: rgba(74, 144, 226, 0.08);
 }
 
 .fade-control {
@@ -456,7 +483,7 @@ footer {
   }
 
   .track {
-    grid-template-columns: 1.5rem 1fr;
+    grid-template-columns: 1.5rem auto 1fr;
     grid-template-rows: auto auto;
   }
 

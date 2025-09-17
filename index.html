@@ -21,7 +21,10 @@
   <main>
  <section class="card" id="nowPlayingSection">
       <h2>Reproducción</h2>
-      <div id="nowPlaying">Ninguna pista seleccionada</div>
+      <div class="now-playing-row">
+        <img id="coverArt" class="cover-art" alt="Carátula del álbum" hidden />
+        <div id="nowPlaying">Ninguna pista seleccionada</div>
+      </div>
       <div class="playback-controls">
         <button id="prevTrack" class="ghost">◀︎</button>
         <button id="togglePlay" disabled>Reproducir</button>
@@ -89,7 +92,7 @@
   </main>
 
   <footer>
-    <p>EduMix v0.3.0</p>
+    <p>EduMix v0.3.1</p>
   </footer>
 
   <script type="module" src="app.js"></script>
