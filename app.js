@@ -1788,35 +1788,66 @@ async function performDropboxSync(options = {}) {
   }
 }
 
-async function uploadPendingTracks(token) {
-  const uploads = getAllTracks().map(async track => {
-    if (track.dropboxPath) {
-      return;
-    }
-    let file = pendingUploads.get(track.id);
-    let uploadName = track.fileName || `${track.id}.mp3`;
-    if (!file) {
-      const stored = await loadTrackFile(track.id);
-      if (stored) {
-        const blob = new Blob([stored.buffer], { type: stored.type || 'audio/mpeg' });
-        uploadName = track.fileName || stored.name || uploadName;
-        if (typeof File === 'function') {
-          file = new File([blob], uploadName, {
-            type: stored.type || blob.type || 'audio/mpeg',
-            lastModified: stored.lastModified || track.lastModified || Date.now(),
-          });
-        } else {
-          file = blob;
-        }
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function parseDropboxRetryInfo(status, headers, bodyText) {
+  let retrySeconds = 0;
+  const headerRetry = headers.get && headers.get('Retry-After');
+  if (headerRetry) {
+    const n = Number(headerRetry);
+    if (Number.isFinite(n) && n > 0) retrySeconds = Math.max(retrySeconds, n);
+  }
+  if (bodyText) {
+    try {
+      const json = JSON.parse(bodyText);
+      const fromBody = Number(json?.error?.retry_after);
+      if (Number.isFinite(fromBody) && fromBody > 0) retrySeconds = Math.max(retrySeconds, fromBody);
+      const summary = String(json?.error_summary || '');
+      if (!retrySeconds && (status === 429 || summary.includes('too_many_write_operations'))) {
+        retrySeconds = 1; // fallback mínimo sugerido por el error sample
       }
-    } else if (typeof file.name === 'string') {
-      uploadName = file.name;
+    } catch {
+      // ignore parse errors
     }
-    if (!file) {
-      return;
+  }
+  if (!retrySeconds && (status === 429 || status === 503)) {
+    retrySeconds = 1;
+  }
+  return retrySeconds;
+}
+
+async function uploadOneTrackWithRetry(token, track) {
+  // Preparar archivo a subir
+  let file = pendingUploads.get(track.id);
+  let uploadName = track.fileName || `${track.id}.mp3`;
+  if (!file) {
+    const stored = await loadTrackFile(track.id);
+    if (stored) {
+      const blob = new Blob([stored.buffer], { type: stored.type || 'audio/mpeg' });
+      uploadName = track.fileName || stored.name || uploadName;
+      if (typeof File === 'function') {
+        file = new File([blob], uploadName, {
+          type: stored.type || blob.type || 'audio/mpeg',
+          lastModified: stored.lastModified || track.lastModified || Date.now(),
+        });
+      } else {
+        file = blob;
+      }
     }
-    const safeName = (uploadName || track.fileName || track.id).replace(/[^a-zA-Z0-9._-]+/g, '_');
-    const remotePath = `/tracks/${track.id}-${safeName}`;
+  } else if (typeof file.name === 'string') {
+    uploadName = file.name;
+  }
+  if (!file) {
+    return;
+  }
+  const safeName = (uploadName || track.fileName || track.id).replace(/[^a-zA-Z0-9._-]+/g, '_');
+  const remotePath = `/tracks/${track.id}-${safeName}`;
+
+  const maxRetries = 6;
+  let attempt = 0;
+  while (attempt <= maxRetries) {
     try {
       const response = await fetch('https://content.dropboxapi.com/2/files/upload', {
         method: 'POST',
@@ -1832,10 +1863,19 @@ async function uploadPendingTracks(token) {
         },
         body: file,
       });
+
       if (!response.ok) {
         const textResponse = await response.text();
+        const retrySeconds = parseDropboxRetryInfo(response.status, response.headers, textResponse);
+        if (retrySeconds && attempt < maxRetries) {
+          const jitter = Math.random() * 250;
+          await sleep(retrySeconds * 1000 + jitter);
+          attempt += 1;
+          continue;
+        }
         throw new Error(textResponse || 'Upload failed');
       }
+
       const metadata = await response.json();
       track.dropboxPath = metadata.path_lower ?? metadata.path_display ?? remotePath;
       track.dropboxRev = metadata.rev;
@@ -1845,12 +1885,38 @@ async function uploadPendingTracks(token) {
       track.urlExpiresAt = 0;
       pendingUploads.delete(track.id);
       persistLocalPlaylist();
+      return;
     } catch (error) {
-      console.error(`No se pudo subir ${track.fileName}`, error);
-      showDropboxError(`Error subiendo ${track.fileName}.`);
+      if (attempt >= maxRetries) {
+        console.error(`No se pudo subir ${track.fileName}`, error);
+        showDropboxError(`Error subiendo ${track.fileName}.`);
+        return;
+      }
+      // Exponential backoff con jitter para errores transitorios sin retry explícito
+      const backoffMs = Math.min(16000, 1000 * Math.pow(2, attempt)) + Math.random() * 300;
+      await sleep(backoffMs);
+      attempt += 1;
     }
-  });
-  await Promise.all(uploads);
+  }
+}
+
+async function uploadPendingTracks(token) {
+  const candidates = getAllTracks().filter(track => !track.dropboxPath);
+  if (!candidates.length) return;
+
+  const CONCURRENCY = 2;
+  let index = 0;
+  const worker = async () => {
+    while (true) {
+      const i = index;
+      index += 1;
+      const track = candidates[i];
+      if (!track) break;
+      await uploadOneTrackWithRetry(token, track);
+    }
+  };
+  const workers = Array.from({ length: Math.min(CONCURRENCY, candidates.length) }, () => worker());
+  await Promise.all(workers);
 }
 
 async function saveDropboxPlaylist(token) {
@@ -1866,24 +1932,44 @@ async function saveDropboxPlaylist(token) {
       tracks: playlist.tracks.map(serializeTrack),
     })),
   };
-  try {
-    await fetch('https://content.dropboxapi.com/2/files/upload', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/octet-stream',
-        'Dropbox-API-Arg': JSON.stringify({
-          path: dropboxConfig.playlistPath,
-          mode: 'overwrite',
-          autorename: false,
-          mute: true,
-        }),
-      },
-      body: new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' }),
-    });
-  } catch (error) {
-    console.error('Error guardando playlist en Dropbox', error);
-    throw error;
+  const body = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const maxRetries = 5;
+  let attempt = 0;
+  while (attempt <= maxRetries) {
+    try {
+      const response = await fetch('https://content.dropboxapi.com/2/files/upload', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/octet-stream',
+          'Dropbox-API-Arg': JSON.stringify({
+            path: dropboxConfig.playlistPath,
+            mode: 'overwrite',
+            autorename: false,
+            mute: true,
+          }),
+        },
+        body,
+      });
+      if (!response.ok) {
+        const text = await response.text();
+        const retrySeconds = parseDropboxRetryInfo(response.status, response.headers, text);
+        if (retrySeconds && attempt < maxRetries) {
+          await sleep(retrySeconds * 1000 + Math.random() * 250);
+          attempt += 1;
+          continue;
+        }
+        throw new Error(text || 'Upload failed');
+      }
+      return; // success
+    } catch (error) {
+      if (attempt >= maxRetries) {
+        console.error('Error guardando playlist en Dropbox', error);
+        throw error;
+      }
+      await sleep(Math.min(16000, 1000 * Math.pow(2, attempt)) + Math.random() * 300);
+      attempt += 1;
+    }
   }
 }
 
