@@ -7,6 +7,7 @@ const shuffleToggleBtn = document.getElementById('shuffleToggle');
 const nowPlayingEl = document.getElementById('nowPlaying');
 const clearPlaylistBtn = document.getElementById('clearPlaylist');
 const playlistPicker = document.getElementById('playlistPicker');
+const pageSizeSelect = document.getElementById('pageSizeSelect');
 const newPlaylistBtn = document.getElementById('newPlaylist');
 const renamePlaylistBtn = document.getElementById('renamePlaylist');
 const deletePlaylistBtn = document.getElementById('deletePlaylist');
@@ -28,6 +29,12 @@ const waveformCanvas = document.getElementById('waveformCanvas');
 const waveformMessage = document.getElementById('waveformMessage');
 const waveformContainer = document.querySelector('.waveform');
 const coverArtImg = document.getElementById('coverArt');
+const nowPlayingSectionEl = document.getElementById('nowPlayingSection');
+const nowPlayingRowEl = document.querySelector('.now-playing-row');
+const pagerEl = document.getElementById('playlistPager');
+const pagerPrevBtn = document.getElementById('pagerPrev');
+const pagerNextBtn = document.getElementById('pagerNext');
+const pagerInfoEl = document.getElementById('pagerInfo');
 const localUsageEl = document.getElementById('localUsage');
 const dropboxUsageEl = document.getElementById('dropboxUsage');
 
@@ -61,6 +68,8 @@ const state = {
   uploadOnPlayOnly: false,
   downloadOnPlayOnly: false,
   preferLocalSource: true,
+  viewPageSize: 0,
+  viewPageIndex: 0,
 };
 
 // Estado de reproducción aleatoria
@@ -178,6 +187,9 @@ function renderPlaylistPicker() {
   const targetValue = state.activePlaylistId || previous || (state.playlists[0] && state.playlists[0].id) || '';
   playlistPicker.value = targetValue;
   playlistPicker.disabled = state.playlists.length <= 1;
+  if (pageSizeSelect) {
+    pageSizeSelect.value = String(state.viewPageSize || 0);
+  }
 }
 
 function buildShuffledIndices(excludeIndex = -1) {
@@ -1089,6 +1101,14 @@ loopToggle?.addEventListener('change', () => {
   persistLocalPlaylist();
 });
 
+pageSizeSelect?.addEventListener('change', () => {
+  const val = Number(pageSizeSelect.value) || 0;
+  state.viewPageSize = Math.max(0, val);
+  state.viewPageIndex = 0;
+  renderPlaylist();
+  persistLocalPlaylist();
+});
+
 playlistEl?.addEventListener('click', event => {
   const button = event.target.closest('button[data-action]');
   if (!button) {
@@ -1255,6 +1275,23 @@ preferLocalSourceToggle?.addEventListener('change', () => {
   persistLocalPlaylist();
 });
 
+pagerPrevBtn?.addEventListener('click', () => {
+  if (state.viewPageSize <= 0) return;
+  state.viewPageIndex = Math.max(0, (state.viewPageIndex || 0) - 1);
+  renderPlaylist();
+  persistLocalPlaylist();
+});
+
+pagerNextBtn?.addEventListener('click', () => {
+  if (state.viewPageSize <= 0) return;
+  const size = state.viewPageSize;
+  const total = state.tracks.length;
+  const pages = Math.max(1, Math.ceil(total / size));
+  state.viewPageIndex = Math.min(pages - 1, (state.viewPageIndex || 0) + 1);
+  renderPlaylist();
+  persistLocalPlaylist();
+});
+
 dropboxRetryFailedBtn?.addEventListener('click', () => {
   if (dropboxState.isSyncing) return;
   const failed = getAllTracks().filter(t => !t.dropboxPath && t._sync === 'error');
@@ -1306,6 +1343,9 @@ function addTracks(files) {
   state.tracks.push(...newTracks);
   newTracks.forEach(track => {
     ensureWaveform(track).catch(console.error);
+    ensureCoverArt(track)
+      .then(changed => { if (changed) updateTrackThumbnails(track); })
+      .catch(() => {});
   });
   invalidateShuffle();
   renderPlaylist();
@@ -1762,6 +1802,7 @@ function updateControls() {
   }
   syncLoopToggle();
   updateDropboxUI();
+  updatePagerUI();
 }
 
 function renderPlaylist() {
@@ -1769,7 +1810,19 @@ function renderPlaylist() {
     return;
   }
   playlistEl.innerHTML = '';
-  state.tracks.forEach((track, index) => {
+  const total = state.tracks.length;
+  const size = Math.max(0, Number(state.viewPageSize) || 0);
+  const pages = size ? Math.max(1, Math.ceil(total / size)) : 1;
+  if (size) {
+    state.viewPageIndex = Math.min(Math.max(0, state.viewPageIndex || 0), pages - 1);
+  } else {
+    state.viewPageIndex = 0;
+  }
+  const start = size ? state.viewPageIndex * size : 0;
+  const end = size ? Math.min(total, start + size) : total;
+
+  for (let index = start; index < end; index += 1) {
+    const track = state.tracks[index];
     const item = document.createElement('li');
     item.className = 'track';
     item.draggable = true;
@@ -1877,16 +1930,15 @@ function renderPlaylist() {
     item.append(handle, thumb, title, actions);
     playlistEl.append(item);
 
-    // Intento de generar miniatura para pistas locales (sin red) si no existe aún
+    // Intento de generar miniatura si no existe aún (usa local o remoto según políticas)
     if (!track.coverUrl) {
-      const hasLocal = pendingUploads.has(track.id);
-      if (hasLocal || !track.isRemote) {
-        ensureCoverArt(track)
-          .then(changed => { if (changed) updateTrackThumbnails(track); })
-          .catch(() => {});
-      }
+      ensureCoverArt(track)
+        .then(changed => { if (changed) updateTrackThumbnails(track); })
+        .catch(() => {});
     }
-  });
+  }
+
+  updatePagerUI();
 }
 
 function formatDuration(seconds) {
@@ -1919,6 +1971,7 @@ function persistLocalPlaylist() {
     playlistServerModified: dropboxPlaylistMeta.serverModified || null,
     perListMeta: dropboxPerListMeta,
     settingsMeta: dropboxSettingsMeta,
+    view: { pageSize: state.viewPageSize, pageIndex: state.viewPageIndex },
     pendingDeletions: Array.from(pendingDeletions),
     updatedAt: Date.now(),
   };
@@ -2005,6 +2058,13 @@ function loadLocalPlaylist() {
     }
     if (data?.settingsMeta && typeof data.settingsMeta === 'object') {
       dropboxSettingsMeta = data.settingsMeta;
+    }
+    if (data?.view) {
+      if (Number.isFinite(data.view.pageSize)) state.viewPageSize = Number(data.view.pageSize);
+      if (Number.isFinite(data.view.pageIndex)) state.viewPageIndex = Number(data.view.pageIndex);
+      if (pageSizeSelect) pageSizeSelect.value = String(state.viewPageSize || 0);
+    } else if (pageSizeSelect) {
+      pageSizeSelect.value = '0';
     }
   } catch (error) {
     console.warn('No se pudo leer la lista local', error);
@@ -3281,10 +3341,14 @@ function updateCoverArtDisplay(track) {
   if (!track || !track.coverUrl) {
     coverArtImg.src = getPlaceholderCover(72);
     coverArtImg.hidden = false;
+    nowPlayingSectionEl?.classList.remove('has-cover');
+    nowPlayingRowEl?.classList.remove('has-cover');
     return;
   }
   coverArtImg.src = track.coverUrl;
   coverArtImg.hidden = false;
+  nowPlayingSectionEl?.classList.add('has-cover');
+  nowPlayingRowEl?.classList.add('has-cover');
 }
 
 function formatBytes(n) {
@@ -3342,6 +3406,24 @@ function updateTrackThumbnails(track) {
     img.src = track.coverUrl || getPlaceholderCover(48);
     img.hidden = false;
   });
+}
+
+function updatePagerUI() {
+  if (!pagerEl || !pagerPrevBtn || !pagerNextBtn || !pagerInfoEl) return;
+  const total = state.tracks.length;
+  const size = Math.max(0, Number(state.viewPageSize) || 0);
+  if (!size || total <= size) {
+    pagerEl.hidden = true;
+    return;
+  }
+  const pages = Math.max(1, Math.ceil(total / size));
+  const page = Math.min(Math.max(0, state.viewPageIndex || 0), pages - 1);
+  const start = page * size + 1;
+  const end = Math.min(total, (page + 1) * size);
+  pagerInfoEl.textContent = `Mostrando ${start}–${end} de ${total}`;
+  pagerPrevBtn.disabled = page <= 0;
+  pagerNextBtn.disabled = page >= pages - 1;
+  pagerEl.hidden = false;
 }
 
 async function initialize() {

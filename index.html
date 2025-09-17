@@ -51,6 +51,13 @@
         <h2>Lista de reproducción</h2>
         <div class="section-actions">
           <select id="playlistPicker" aria-label="Selecciona una lista"></select>
+          <select id="pageSizeSelect" aria-label="Tamaño de página">
+            <option value="0">Todas</option>
+            <option value="10">10</option>
+            <option value="25">25</option>
+            <option value="50">50</option>
+            <option value="100">100</option>
+          </select>
           <button id="newPlaylist" class="ghost icon-button" title="Nueva lista" aria-label="Nueva lista">＋</button>
           <button id="renamePlaylist" class="ghost icon-button" title="Renombrar lista" aria-label="Renombrar lista">✎</button>
           <button id="deletePlaylist" class="ghost icon-button" title="Eliminar lista" aria-label="Eliminar lista">🗑</button>
@@ -58,6 +65,11 @@
         </div>
       </div>
       <ul id="playlist" aria-live="polite"></ul>
+      <div class="pager" id="playlistPager" hidden>
+        <button id="pagerPrev" class="ghost" title="Página anterior" aria-label="Página anterior">◀︎</button>
+        <span id="pagerInfo">—</span>
+        <button id="pagerNext" class="ghost" title="Página siguiente" aria-label="Página siguiente">▶︎</button>
+      </div>
     </section>
     <section class="card" id="addSection">
       <h2>Selecciona tus archivos</h2>
@@ -100,7 +112,7 @@
   </main>
 
   <footer>
-    <p>EduMix v0.3.3</p>
+    <p>EduMix v0.3.4</p>
   </footer>
 
   <script type="module" src="app.js"></script>

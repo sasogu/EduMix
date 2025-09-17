@@ -255,6 +255,19 @@ button.ghost:not(:disabled):hover {
   margin: 1rem 0 0.5rem;
 }
 
+.pager {
+  margin-top: 0.6rem;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  justify-content: flex-end;
+  font-size: 0.9rem;
+}
+
+.pager #pagerInfo {
+  opacity: 0.8;
+}
+
 .now-playing-row {
   display: grid;
   grid-template-columns: auto 1fr;
@@ -270,6 +283,26 @@ button.ghost:not(:disabled):hover {
   border: 1px solid rgba(74, 144, 226, 0.25);
   box-shadow: 0 4px 12px rgba(74, 144, 226, 0.15);
   background: rgba(74, 144, 226, 0.08);
+  transition: width 0.25s ease, height 0.25s ease, box-shadow 0.25s ease, transform 0.25s ease;
+}
+
+/* Dar protagonismo a la carátula cuando existe */
+#nowPlayingSection.has-cover .cover-art {
+  width: 140px;
+  height: 140px;
+  box-shadow: 0 16px 40px rgba(74, 144, 226, 0.35);
+}
+
+#nowPlayingSection.has-cover #nowPlaying {
+  font-size: 1.25rem;
+  font-weight: 700;
+}
+
+@media (max-width: 720px) {
+  #nowPlayingSection.has-cover .cover-art {
+    width: 104px;
+    height: 104px;
+  }
 }
 
 .fade-control {
