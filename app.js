@@ -27,6 +27,7 @@ const dropboxStatusEl = document.getElementById('dropboxStatus');
 const dropboxConnectBtn = document.getElementById('dropboxConnect');
 const dropboxSyncBtn = document.getElementById('dropboxSync');
 const dropboxDisconnectBtn = document.getElementById('dropboxDisconnect');
+const dropboxSyncSelectedBtn = document.getElementById('dropboxSyncSelected');
 const uploadOnPlayOnlyToggle = document.getElementById('uploadOnPlayOnly');
 const downloadOnPlayOnlyToggle = document.getElementById('downloadOnPlayOnly');
 const preferLocalSourceToggle = document.getElementById('preferLocalSource');
@@ -89,6 +90,8 @@ const state = {
   viewMinRating: 0,
   normalizationEnabled: true,
 };
+
+let selectedForSync = new Set();
 
 // Estado de reproducción aleatoria
 let shuffleQueue = [];
@@ -1468,6 +1471,12 @@ dropboxSyncBtn?.addEventListener('click', () => {
   performDropboxSync({ loadRemote: true }).catch(console.error);
 });
 
+dropboxSyncSelectedBtn?.addEventListener('click', () => {
+  const ids = Array.from(selectedForSync);
+  if (!ids.length) return;
+  performDropboxSync({ loadRemote: true, onlyTrackIds: ids }).catch(console.error);
+});
+
 dropboxDisconnectBtn?.addEventListener('click', () => {
   disconnectDropbox();
 });
@@ -2069,6 +2078,8 @@ function renderPlaylist() {
     return;
   }
   playlistEl.innerHTML = '';
+  const existingIds = new Set(state.tracks.map(t => t.id));
+  selectedForSync = new Set(Array.from(selectedForSync).filter(id => existingIds.has(id)));
   const order = buildViewOrder();
   const total = order.length;
   const size = Math.max(0, Number(state.viewPageSize) || 0);
@@ -2176,7 +2187,7 @@ function renderPlaylist() {
 
     const actions = document.createElement('div');
     actions.className = 'track-actions';
-
+    // Botones de acción (Play, Renombrar, Eliminar) + Selección para sync
     const playButton = document.createElement('button');
     playButton.className = 'ghost icon-button';
     const isPlayingTrack = index === state.currentIndex && state.isPlaying;
@@ -2202,7 +2213,23 @@ function renderPlaylist() {
     removeButton.dataset.action = 'remove';
     removeButton.dataset.index = String(index);
 
-    actions.append(playButton, renameButton, removeButton);
+    // Checkbox de selección junto a las acciones
+    const selector = document.createElement('input');
+    selector.type = 'checkbox';
+    selector.className = 'track-select';
+    selector.title = 'Seleccionar para sincronizar';
+    selector.checked = selectedForSync.has(track.id);
+    selector.addEventListener('change', () => {
+      if (selector.checked) {
+        selectedForSync.add(track.id);
+      } else {
+        selectedForSync.delete(track.id);
+      }
+      persistLocalPlaylist();
+      updateDropboxUI();
+    });
+
+    actions.append(playButton, renameButton, removeButton, selector);
     item.append(handle, thumb, title, actions);
     playlistEl.append(item);
 
@@ -2251,6 +2278,7 @@ function persistLocalPlaylist() {
     settingsMeta: dropboxSettingsMeta,
     view: { pageSize: state.viewPageSize, pageIndex: state.viewPageIndex, sort: state.viewSort, minRating: state.viewMinRating },
     pendingDeletions: Array.from(pendingDeletions),
+    selectedForSyncIds: Array.from(selectedForSync),
     updatedAt: Date.now(),
   };
   try {
@@ -2268,6 +2296,11 @@ function loadLocalPlaylist() {
       return;
     }
     const data = JSON.parse(raw);
+    if (Array.isArray(data?.selectedForSyncIds)) {
+      selectedForSync = new Set(data.selectedForSyncIds);
+    } else {
+      selectedForSync = new Set();
+    }
     if (Array.isArray(data.pendingDeletions)) {
       pendingDeletions = new Set(data.pendingDeletions);
     }
@@ -2398,6 +2431,9 @@ function updateDropboxUI() {
     dropboxStatusEl.textContent = 'Sin conectar';
     dropboxStatusEl.classList.remove('is-error');
     dropboxSyncBtn.hidden = true;
+    if (dropboxSyncSelectedBtn) {
+      dropboxSyncSelectedBtn.hidden = true;
+    }
     dropboxDisconnectBtn.hidden = true;
     if (dropboxRetryFailedBtn) {
       dropboxRetryFailedBtn.hidden = true;
@@ -2425,6 +2461,12 @@ function updateDropboxUI() {
   dropboxDisconnectBtn.hidden = false;
   dropboxSyncBtn.disabled = dropboxState.isSyncing;
   dropboxDisconnectBtn.disabled = dropboxState.isSyncing;
+  if (dropboxSyncSelectedBtn) {
+    dropboxSyncSelectedBtn.hidden = false;
+    const validIds = new Set(state.tracks.map(t => t.id));
+    const count = Array.from(selectedForSync).filter(id => validIds.has(id)).length;
+    dropboxSyncSelectedBtn.disabled = dropboxState.isSyncing || count === 0;
+  }
   if (dropboxRetryFailedBtn) {
     const hasFailed = hasFailedUploads();
     dropboxRetryFailedBtn.hidden = !hasFailed;
