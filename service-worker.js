@@ -1,4 +1,4 @@
-const CACHE_NAME = 'edumix-cache-v0.5.0';
+const CACHE_NAME = 'edumix-cache-v0.5.2';
 const APP_SHELL = [
   './',
   './index.html',

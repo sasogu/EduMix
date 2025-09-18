@@ -1482,35 +1482,50 @@ installButton?.addEventListener('click', async () => {
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('service-worker.js').then(reg => {
+      try { console.debug('[SW] registered', reg); } catch {}
+      // Fuerza comprobación de actualizaciones en cada carga
+      try { reg.update(); } catch {}
+
       const notifyUpdate = () => {
         if (!navigator.serviceWorker.controller) return;
+        try { console.debug('[SW] update available: waiting worker ready'); } catch {}
         if (updateToastEl) updateToastEl.hidden = false;
         refreshAppBtn?.addEventListener('click', () => {
+          try { console.debug('[SW] refresh click → skipWaiting'); } catch {}
           try {
             reg.waiting?.postMessage({ type: 'SKIP_WAITING' });
             reg.waiting?.skipWaiting?.();
           } catch {}
           const reload = () => window.location.reload();
           let reloaded = false;
-          navigator.serviceWorker.addEventListener('controllerchange', () => {
+          const onControllerChange = () => {
+            try { console.debug('[SW] controllerchange → reload'); } catch {}
             if (!reloaded) { reloaded = true; reload(); }
-          });
-          setTimeout(reload, 500);
+          };
+          navigator.serviceWorker.addEventListener('controllerchange', onControllerChange, { once: true });
+          setTimeout(reload, 800);
         }, { once: true });
       };
+
       reg.addEventListener('updatefound', () => {
         const installing = reg.installing;
+        try { console.debug('[SW] updatefound', installing); } catch {}
         installing?.addEventListener('statechange', () => {
+          try { console.debug('[SW] installing state:', installing.state); } catch {}
           if (installing.state === 'installed') {
             notifyUpdate();
           }
         });
       });
-      // Also check on load in case it was already updated
+
+      // También comprobamos si ya hay un worker en espera
       if (reg.waiting) {
         notifyUpdate();
       }
-    }).catch(console.error);
+    }).catch(err => {
+      try { console.debug('[SW] register failed', err); } catch {}
+      console.error(err);
+    });
   });
 }
 
@@ -2957,15 +2972,6 @@ async function uploadOneTrackWithRetry(token, track) {
         metadata = await resp.json();
       }
 
-      track.dropboxPath = metadata.path_lower ?? metadata.path_display ?? remotePath;
-      track.dropboxRev = metadata.rev;
-      track.dropboxSize = metadata.size;
-      track.dropboxUpdatedAt = Date.now();
-      track.isRemote = true;
-      track.urlExpiresAt = 0;
-      pendingUploads.delete(track.id);
-      persistLocalPlaylist();
-      return;
       track.dropboxPath = metadata.path_lower ?? metadata.path_display ?? remotePath;
       track.dropboxRev = metadata.rev;
       track.dropboxSize = metadata.size;
