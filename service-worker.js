@@ -1,4 +1,4 @@
-const CACHE_NAME = 'edumix-cache-v0.5.2';
+const CACHE_NAME = 'edumix-cache-v0.5.9';
 const APP_SHELL = [
   './',
   './index.html',
@@ -13,9 +13,8 @@ self.addEventListener('install', event => {
   event.waitUntil(
     caches.open(CACHE_NAME)
       .then(cache => cache.addAll(APP_SHELL))
-      // No llamamos a skipWaiting aquí; dejamos al SW en "waiting"
-      // para que la UI pueda controlar la activación cuando el usuario pulse "Actualizar".
-      .then(() => void 0)
+      // Activación inmediata de nuevas versiones del SW
+      .then(() => self.skipWaiting())
   );
 });
 

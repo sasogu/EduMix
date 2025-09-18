@@ -53,8 +53,6 @@ const searchResultsEl = document.getElementById('searchResults');
 const clearLocalCopiesBtn = document.getElementById('clearLocalCopies');
 const selectAllForSyncBtn = document.getElementById('selectAllForSync');
 const clearSelectedForSyncBtn = document.getElementById('clearSelectedForSync');
-const updateToastEl = document.getElementById('updateToast');
-const refreshAppBtn = document.getElementById('refreshApp');
 
 const STORAGE_KEYS = {
   playlist: 'edumix-playlist',
@@ -1486,25 +1484,21 @@ if ('serviceWorker' in navigator) {
       // Fuerza comprobación de actualizaciones en cada carga
       try { reg.update(); } catch {}
 
-      const notifyUpdate = () => {
+      const activateUpdate = () => {
         if (!navigator.serviceWorker.controller) return;
-        try { console.debug('[SW] update available: waiting worker ready'); } catch {}
-        if (updateToastEl) updateToastEl.hidden = false;
-        refreshAppBtn?.addEventListener('click', () => {
-          try { console.debug('[SW] refresh click → skipWaiting'); } catch {}
-          try {
-            reg.waiting?.postMessage({ type: 'SKIP_WAITING' });
-            reg.waiting?.skipWaiting?.();
-          } catch {}
-          const reload = () => window.location.reload();
-          let reloaded = false;
-          const onControllerChange = () => {
-            try { console.debug('[SW] controllerchange → reload'); } catch {}
-            if (!reloaded) { reloaded = true; reload(); }
-          };
-          navigator.serviceWorker.addEventListener('controllerchange', onControllerChange, { once: true });
-          setTimeout(reload, 800);
-        }, { once: true });
+        try { console.debug('[SW] auto-activate update'); } catch {}
+        try {
+          reg.waiting?.postMessage({ type: 'SKIP_WAITING' });
+          reg.waiting?.skipWaiting?.();
+        } catch {}
+        const reload = () => window.location.reload();
+        let reloaded = false;
+        const onControllerChange = () => {
+          try { console.debug('[SW] controllerchange → reload'); } catch {}
+          if (!reloaded) { reloaded = true; reload(); }
+        };
+        navigator.serviceWorker.addEventListener('controllerchange', onControllerChange, { once: true });
+        setTimeout(reload, 800);
       };
 
       reg.addEventListener('updatefound', () => {
@@ -1513,14 +1507,14 @@ if ('serviceWorker' in navigator) {
         installing?.addEventListener('statechange', () => {
           try { console.debug('[SW] installing state:', installing.state); } catch {}
           if (installing.state === 'installed') {
-            notifyUpdate();
+            activateUpdate();
           }
         });
       });
 
-      // También comprobamos si ya hay un worker en espera
+      // Si ya hay un worker en espera, actívalo de inmediato
       if (reg.waiting) {
-        notifyUpdate();
+        activateUpdate();
       }
     }).catch(err => {
       try { console.debug('[SW] register failed', err); } catch {}

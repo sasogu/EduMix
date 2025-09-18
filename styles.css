@@ -581,6 +581,11 @@ button.ghost:not(:disabled):hover {
   border-color: rgba(74, 144, 226, 0.35);
 }
 
+/* Alinear estilo del botón de borrar copias locales con el resto de botones cloud */
+#clearLocalCopies.ghost {
+  border-color: rgba(74, 144, 226, 0.35);
+}
+
 .cloud-option {
   display: inline-flex;
   align-items: center;

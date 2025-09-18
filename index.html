@@ -137,12 +137,13 @@
           <button id="dropboxSyncSelected" class="ghost" hidden>Sincronizar seleccionados</button>
           <button id="dropboxRetryFailed" class="ghost" hidden>Reintentar fallidas</button>
           <button id="dropboxDisconnect" class="ghost" hidden>Desconectar</button>
+          <button id="clearLocalCopies" class="ghost" title="Borrar copias locales" aria-label="Borrar copias locales">Borrar copias locales</button>
         </div>
         <div class="storage-stats" id="storageStats">
           <div><strong>Local:</strong> <span id="localUsage">—</span></div>
           <div><strong>Dropbox (app):</strong> <span id="dropboxUsage">—</span></div>
         </div>
-        <button id="clearLocalCopies" class="ghost">Borrar copias locales</button>
+        
         <!-- Preferir fuente local: oculto por ahora (mantiene configuración por defecto) -->
       </div>
     </section>
@@ -150,14 +151,10 @@
   </main>
 
   <footer>
-    <p>EduMix v0.5.2</p>
+    <p>EduMix v0.5.9</p>
   </footer>
 
-  <script type="module" src="app.js?v=0.4.8"></script>
-  <div id="updateToast" hidden style="position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:#111827;color:#fff;padding:10px 14px;border-radius:8px;box-shadow:0 4px 14px rgba(0,0,0,.25);display:flex;gap:8px;align-items:center;z-index:9999;">
-    <span>Hay una actualización disponible</span>
-    <button id="refreshApp" class="ghost" style="background:#2563eb;color:#fff;border:none;padding:6px 10px;border-radius:6px;">Actualizar</button>
-  </div>
+  <script type="module" src="app.js?v=0.5.9"></script>
   <div id="coverLightbox" class="lightbox" hidden>
     <img id="coverLightboxImg" alt="Carátula ampliada" />
   </div>
