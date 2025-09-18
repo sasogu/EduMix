@@ -102,6 +102,8 @@
           <button id="renamePlaylist" class="ghost icon-button" title="Renombrar lista" aria-label="Renombrar lista">✎</button>
           <button id="deletePlaylist" class="ghost icon-button" title="Eliminar lista" aria-label="Eliminar lista">🗑</button>
           <button id="clearPlaylist" class="ghost icon-button" title="Vaciar lista" aria-label="Vaciar lista">🧹</button>
+          <button id="selectAllForSync" class="ghost" title="Seleccionar todas las pistas de esta lista" aria-label="Seleccionar todas">Seleccionar todo</button>
+          <button id="clearSelectedForSync" class="ghost" title="Quitar selección de esta lista" aria-label="Quitar selección">Quitar selección</button>
         </div>
       </div>
       <ul id="playlist" aria-live="polite"></ul>
@@ -140,6 +142,7 @@
           <div><strong>Local:</strong> <span id="localUsage">—</span></div>
           <div><strong>Dropbox (app):</strong> <span id="dropboxUsage">—</span></div>
         </div>
+        <button id="clearLocalCopies" class="ghost">Borrar copias locales</button>
         <!-- Preferir fuente local: oculto por ahora (mantiene configuración por defecto) -->
       </div>
     </section>
@@ -147,10 +150,14 @@
   </main>
 
   <footer>
-    <p>EduMix v0.4.8</p>
+    <p>EduMix v0.4.9</p>
   </footer>
 
   <script type="module" src="app.js?v=0.4.8"></script>
+  <div id="updateToast" hidden style="position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:#111827;color:#fff;padding:10px 14px;border-radius:8px;box-shadow:0 4px 14px rgba(0,0,0,.25);display:flex;gap:8px;align-items:center;z-index:9999;">
+    <span>Hay una actualización disponible</span>
+    <button id="refreshApp" class="ghost" style="background:#2563eb;color:#fff;border:none;padding:6px 10px;border-radius:6px;">Actualizar</button>
+  </div>
   <div id="coverLightbox" class="lightbox" hidden>
     <img id="coverLightboxImg" alt="Carátula ampliada" />
   </div>

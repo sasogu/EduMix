@@ -50,6 +50,11 @@ const localUsageEl = document.getElementById('localUsage');
 const dropboxUsageEl = document.getElementById('dropboxUsage');
 const globalSearchInput = document.getElementById('globalSearch');
 const searchResultsEl = document.getElementById('searchResults');
+const clearLocalCopiesBtn = document.getElementById('clearLocalCopies');
+const selectAllForSyncBtn = document.getElementById('selectAllForSync');
+const clearSelectedForSyncBtn = document.getElementById('clearSelectedForSync');
+const updateToastEl = document.getElementById('updateToast');
+const refreshAppBtn = document.getElementById('refreshApp');
 
 const STORAGE_KEYS = {
   playlist: 'edumix-playlist',
@@ -1476,7 +1481,36 @@ installButton?.addEventListener('click', async () => {
 
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('service-worker.js').catch(console.error);
+    navigator.serviceWorker.register('service-worker.js').then(reg => {
+      const notifyUpdate = () => {
+        if (!navigator.serviceWorker.controller) return;
+        if (updateToastEl) updateToastEl.hidden = false;
+        refreshAppBtn?.addEventListener('click', () => {
+          try {
+            reg.waiting?.postMessage({ type: 'SKIP_WAITING' });
+            reg.waiting?.skipWaiting?.();
+          } catch {}
+          const reload = () => window.location.reload();
+          let reloaded = false;
+          navigator.serviceWorker.addEventListener('controllerchange', () => {
+            if (!reloaded) { reloaded = true; reload(); }
+          });
+          setTimeout(reload, 500);
+        }, { once: true });
+      };
+      reg.addEventListener('updatefound', () => {
+        const installing = reg.installing;
+        installing?.addEventListener('statechange', () => {
+          if (installing.state === 'installed') {
+            notifyUpdate();
+          }
+        });
+      });
+      // Also check on load in case it was already updated
+      if (reg.waiting) {
+        notifyUpdate();
+      }
+    }).catch(console.error);
   });
 }
 
@@ -1508,6 +1542,44 @@ dropboxDisconnectBtn?.addEventListener('click', () => {
 preferLocalSourceToggle?.addEventListener('change', () => {
   state.preferLocalSource = !!preferLocalSourceToggle.checked;
   persistLocalPlaylist();
+});
+
+clearLocalCopiesBtn?.addEventListener('click', async () => {
+  const count = getAllTracks().length;
+  const ok = window.confirm(`¿Borrar copias locales de ${count} pista${count!==1?'s':''}? No se elimina la lista.`);
+  if (!ok) return;
+  const tracks = getAllTracks();
+  for (const track of tracks) {
+    try {
+      await deleteTrackFile(track.id);
+      if (track.url && track.url.startsWith('blob:')) {
+        try { URL.revokeObjectURL(track.url); } catch {}
+      }
+      track.url = null;
+      track.isRemote = !!track.dropboxPath;
+      track.urlExpiresAt = 0;
+    } catch {}
+  }
+  waveformCache.clear();
+  persistLocalPlaylist();
+  renderPlaylist();
+  scheduleStorageStatsUpdate();
+});
+
+selectAllForSyncBtn?.addEventListener('click', () => {
+  const ids = (state.tracks || []).map(t => t.id);
+  ids.forEach(id => selectedForSync.add(id));
+  persistLocalPlaylist();
+  renderPlaylist();
+  updateDropboxUI();
+});
+
+clearSelectedForSyncBtn?.addEventListener('click', () => {
+  const ids = (state.tracks || []).map(t => t.id);
+  ids.forEach(id => selectedForSync.delete(id));
+  persistLocalPlaylist();
+  renderPlaylist();
+  updateDropboxUI();
 });
 
 pagerPrevBtn?.addEventListener('click', () => {
