@@ -16,14 +16,23 @@
       <h1>EduMix</h1>
       <p class="subtitle">Organiza, reproduce y mezcla tus audios favoritos</p>
     </div>
-    <button id="installButton" hidden>Instalar app</button>
+    <div class="header-actions">
+      <button id="themeToggle" class="ghost icon-button" title="Cambiar tema" aria-label="Cambiar tema" aria-pressed="false">🌞</button>
+      <button id="installButton" hidden>Instalar app</button>
+    </div>
   </header>
   <main>
  <section class="card" id="nowPlayingSection">
       <h2>Reproducción</h2>
       <div class="now-playing-row">
         <img id="coverArt" class="cover-art" alt="Carátula del álbum" hidden />
-        <div id="nowPlaying">Ninguna pista seleccionada</div>
+        <div>
+          <div id="nowPlaying">Ninguna pista seleccionada</div>
+          <div class="time-row">
+            <div id="timeDisplay" class="time-display" aria-live="polite">—:—</div>
+            <button id="timeModeToggle" class="ghost icon-button" aria-label="Alternar tiempo transcurrido/restante" title="Mostrar tiempo restante" aria-pressed="false">⏱️</button>
+          </div>
+        </div>
       </div>
       <div id="nowRating" class="now-rating" hidden>
         <button type="button" class="star-button" data-value="1" aria-label="Valorar 1 estrella">☆</button>
@@ -143,7 +152,7 @@
   </main>
 
   <footer>
-    <p>EduMix v0.4.0</p>
+    <p>EduMix v0.4.5</p>
   </footer>
 
   <script type="module" src="app.js"></script>

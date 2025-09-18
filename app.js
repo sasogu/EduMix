@@ -5,6 +5,7 @@ const prevTrackBtn = document.getElementById('prevTrack');
 const nextTrackBtn = document.getElementById('nextTrack');
 const shuffleToggleBtn = document.getElementById('shuffleToggle');
 const nowPlayingEl = document.getElementById('nowPlaying');
+const timeDisplayEl = document.getElementById('timeDisplay');
 const clearPlaylistBtn = document.getElementById('clearPlaylist');
 const playlistPicker = document.getElementById('playlistPicker');
 const pageSizeSelect = document.getElementById('pageSizeSelect');
@@ -19,6 +20,8 @@ const speedValue = document.getElementById('speedValue');
 const speedResetBtn = document.getElementById('speedReset');
 const fadeValue = document.getElementById('fadeValue');
 const installButton = document.getElementById('installButton');
+const themeToggle = document.getElementById('themeToggle');
+const timeModeToggle = document.getElementById('timeModeToggle');
 const loopToggle = document.getElementById('loopToggle');
 const dropboxStatusEl = document.getElementById('dropboxStatus');
 const dropboxConnectBtn = document.getElementById('dropboxConnect');
@@ -51,6 +54,8 @@ const STORAGE_KEYS = {
   playlist: 'edumix-playlist',
   dropboxAuth: 'edumix-dropbox-auth',
   dropboxSession: 'edumix-dropbox-session',
+  theme: 'edumix-theme',
+  timeMode: 'edumix-time-mode', // 'elapsed' | 'remaining'
 };
 
 const dropboxConfig = {
@@ -88,6 +93,120 @@ const state = {
 // Estado de reproducción aleatoria
 let shuffleQueue = [];
 let shuffleHistory = [];
+
+// Tema: claro/oscuro con persistencia
+function applyTheme(theme) {
+  const root = document.documentElement;
+  if (theme === 'dark') {
+    root.setAttribute('data-theme', 'dark');
+  } else if (theme === 'light') {
+    root.setAttribute('data-theme', 'light');
+  } else {
+    root.removeAttribute('data-theme');
+  }
+}
+
+function getSystemPrefersDark() {
+  return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+}
+
+function setThemeToggleUI(isDark) {
+  if (!themeToggle) return;
+  themeToggle.setAttribute('aria-pressed', String(isDark));
+  themeToggle.textContent = isDark ? '🌙' : '🌞';
+  themeToggle.title = isDark ? 'Tema oscuro' : 'Tema claro';
+}
+
+function initThemeFromStorage() {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEYS.theme);
+    const theme = (saved === 'dark' || saved === 'light') ? saved : null;
+    applyTheme(theme);
+    const effectiveDark = theme ? theme === 'dark' : getSystemPrefersDark();
+    setThemeToggleUI(effectiveDark);
+  } catch {}
+}
+
+initThemeFromStorage();
+
+themeToggle?.addEventListener('click', () => {
+  const isDark = themeToggle.getAttribute('aria-pressed') === 'true';
+  const next = isDark ? 'light' : 'dark';
+  applyTheme(next);
+  setThemeToggleUI(!isDark);
+  try { localStorage.setItem(STORAGE_KEYS.theme, next); } catch {}
+});
+
+// Tiempo transcurrido / restante
+function setTimeModeToggleUI(mode) {
+  if (!timeModeToggle) return;
+  const isRemaining = mode === 'remaining';
+  timeModeToggle.setAttribute('aria-pressed', String(isRemaining));
+  timeModeToggle.textContent = isRemaining ? '⏳' : '⏱️';
+  timeModeToggle.title = isRemaining ? 'Mostrar tiempo transcurrido' : 'Mostrar tiempo restante';
+}
+
+function applyInitialTimeMode() {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEYS.timeMode);
+    const mode = (saved === 'remaining' || saved === 'elapsed') ? saved : 'elapsed';
+    setTimeModeToggleUI(mode);
+  } catch {}
+}
+
+function getSelectedTimeMode() {
+  return timeModeToggle?.getAttribute('aria-pressed') === 'true' ? 'remaining' : 'elapsed';
+}
+
+function resetTimeDisplayForTrack(track) {
+  if (!timeDisplayEl) return;
+  const mode = getSelectedTimeMode();
+  if (mode === 'remaining') {
+    if (Number.isFinite(track?.duration)) {
+      timeDisplayEl.textContent = `-${formatDuration(track.duration)}`;
+    } else {
+      timeDisplayEl.textContent = '—:—';
+    }
+  } else {
+    timeDisplayEl.textContent = '0:00';
+  }
+}
+
+function updateTimeDisplay(player) {
+  if (!timeDisplayEl) return;
+  const track = state.tracks[state.currentIndex];
+  if (!track || player.trackId !== track.id) {
+    return;
+  }
+  const { currentTime, duration } = player.audio;
+  if (!Number.isFinite(duration) || duration <= 0) {
+    timeDisplayEl.textContent = '—:—';
+    return;
+  }
+  const mode = getSelectedTimeMode();
+  if (mode === 'remaining') {
+    const remaining = Math.max(0, duration - currentTime);
+    timeDisplayEl.textContent = `-${formatDuration(remaining)}`;
+  } else {
+    const elapsed = Math.max(0, currentTime);
+    timeDisplayEl.textContent = `${formatDuration(elapsed)}`;
+  }
+}
+
+applyInitialTimeMode();
+timeModeToggle?.addEventListener('click', () => {
+  const current = getSelectedTimeMode();
+  const next = current === 'remaining' ? 'elapsed' : 'remaining';
+  setTimeModeToggleUI(next);
+  try { localStorage.setItem(STORAGE_KEYS.timeMode, next); } catch {}
+  // Reestablece visualización acorde al modo actual
+  const track = state.tracks[state.currentIndex];
+  if (track) {
+    resetTimeDisplayForTrack(track);
+  } else if (timeDisplayEl) {
+    timeDisplayEl.textContent = '—:—';
+  }
+});
 
 function invalidateShuffle() {
   shuffleQueue = [];
@@ -989,7 +1108,7 @@ function createPlayer() {
   gain.connect(compressor);
   compressor.connect(ctx.destination);
   const player = { audio, gain, compressor, stopTimeout: null, advanceHandler: null, trackId: null };
-  audio.addEventListener('timeupdate', () => handleWaveformProgress(player));
+  audio.addEventListener('timeupdate', () => { handleWaveformProgress(player); updateTimeDisplay(player); });
   audio.addEventListener('loadedmetadata', () => handleWaveformMetadata(player));
   return player;
 }
@@ -1069,6 +1188,12 @@ filePicker?.addEventListener('change', event => {
 });
 
 clearPlaylistBtn?.addEventListener('click', () => {
+  const count = state.tracks.length;
+  const noun = count === 1 ? 'pista' : 'pistas';
+  const confirmed = window.confirm(`¿Limpiar la lista actual? Se eliminarán ${count} ${noun} de esta sesión.`);
+  if (!confirmed) {
+    return;
+  }
   const removeRemotePaths = state.tracks
     .map(track => track.dropboxPath)
     .filter(Boolean);
@@ -1863,6 +1988,7 @@ function updateNowPlaying() {
     nowPlayingEl.textContent = 'Ninguna pista seleccionada';
     updateCoverArtDisplay(null);
     updateNowRatingUI();
+    if (timeDisplayEl) timeDisplayEl.textContent = '—:—';
     return;
   }
   const duration = track.duration ? ` · ${formatDuration(track.duration)}` : '';
@@ -1871,6 +1997,7 @@ function updateNowPlaying() {
     updateCoverArtDisplay(track);
   }
   updateNowRatingUI();
+  resetTimeDisplayForTrack(track);
 }
 
 function syncLoopToggle() {
