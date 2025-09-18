@@ -22,7 +22,7 @@
     </div>
   </header>
   <main>
- <section class="card" id="nowPlayingSection">
+    <section class="card" id="nowPlayingSection">
       <h2>Reproducción</h2>
       <div class="now-playing-row">
         <img id="coverArt" class="cover-art" alt="Carátula del álbum" hidden />
@@ -111,6 +111,11 @@
         <button id="pagerNext" class="ghost" title="Página siguiente" aria-label="Página siguiente">▶︎</button>
       </div>
     </section>
+        <section class="card" id="searchSection">
+      <h2>Buscar</h2>
+      <input type="search" id="globalSearch" placeholder="Buscar en todas las listas" aria-label="Buscar en todas las listas" />
+      <ul id="searchResults"></ul>
+    </section>
     <section class="card" id="addSection">
       <h2>Selecciona tus archivos</h2>
       <label class="file-input">
@@ -135,18 +140,7 @@
           <div><strong>Local:</strong> <span id="localUsage">—</span></div>
           <div><strong>Dropbox (app):</strong> <span id="dropboxUsage">—</span></div>
         </div>
-        <label class="cloud-option" title="Sube las pistas a Dropbox solo cuando las reproduces">
-          <input type="checkbox" id="uploadOnPlayOnly" />
-          Subir a Dropbox solo al reproducir
-        </label>
-        <label class="cloud-option" title="Descarga pistas desde Dropbox solo cuando las reproduces (evita consumos de datos por anticipado)">
-          <input type="checkbox" id="downloadOnPlayOnly" />
-          Descargar desde Dropbox solo al reproducir
-        </label>
-        <label class="cloud-option" title="Usar siempre la copia local cuando exista, incluso si hay una copia en Dropbox">
-          <input type="checkbox" id="preferLocalSource" checked />
-          Preferir fuente local si existe
-        </label>
+        <!-- Preferir fuente local: oculto por ahora (mantiene configuración por defecto) -->
       </div>
     </section>
    

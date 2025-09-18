@@ -28,8 +28,6 @@ const dropboxConnectBtn = document.getElementById('dropboxConnect');
 const dropboxSyncBtn = document.getElementById('dropboxSync');
 const dropboxDisconnectBtn = document.getElementById('dropboxDisconnect');
 const dropboxSyncSelectedBtn = document.getElementById('dropboxSyncSelected');
-const uploadOnPlayOnlyToggle = document.getElementById('uploadOnPlayOnly');
-const downloadOnPlayOnlyToggle = document.getElementById('downloadOnPlayOnly');
 const preferLocalSourceToggle = document.getElementById('preferLocalSource');
 const normalizationToggle = document.getElementById('normToggle');
 // Declarado para evitar ReferenceError en usos con optional chaining
@@ -50,6 +48,8 @@ const pagerNextBtn = document.getElementById('pagerNext');
 const pagerInfoEl = document.getElementById('pagerInfo');
 const localUsageEl = document.getElementById('localUsage');
 const dropboxUsageEl = document.getElementById('dropboxUsage');
+const globalSearchInput = document.getElementById('globalSearch');
+const searchResultsEl = document.getElementById('searchResults');
 
 const STORAGE_KEYS = {
   playlist: 'edumix-playlist',
@@ -80,8 +80,6 @@ const state = {
   fadeDuration: Number(fadeSlider?.value ?? 3),
   autoLoop: Boolean(loopToggle?.checked),
   shuffle: false,
-  uploadOnPlayOnly: false,
-  downloadOnPlayOnly: false,
   preferLocalSource: true,
   playbackRate: 1,
   viewPageSize: 0,
@@ -96,6 +94,7 @@ let selectedForSync = new Set();
 // Estado de reproducción aleatoria
 let shuffleQueue = [];
 let shuffleHistory = [];
+let searchDebounce = null;
 
 // Tema: claro/oscuro con persistencia
 function applyTheme(theme) {
@@ -866,7 +865,6 @@ function peekNextIndex() {
 
 function maybePrefetchNext() {
   try {
-    if (state.downloadOnPlayOnly) return;
     const nextIdx = peekNextIndex();
     if (nextIdx === -1) return;
     const next = state.tracks[nextIdx];
@@ -910,16 +908,7 @@ function setWaveformTrack(track) {
     drawWaveform(waveformState.peaks, waveformState.progress);
   } else {
     waveformState.peaks = null;
-    const shouldDeferRemote = Boolean(state.downloadOnPlayOnly && (track.isRemote || track.dropboxPath) && !track._hasPlayed);
-    if (shouldDeferRemote) {
-      waveformContainer.classList.remove('is-loading');
-      waveformContainer.classList.remove('has-data');
-      if (waveformMessage) {
-        waveformMessage.textContent = 'La forma de onda se descargará al reproducir.';
-      }
-      drawWaveform(null, 0);
-      return;
-    }
+    // Ya no se difiere la descarga de forma de onda por política de reproducción
     waveformContainer.classList.add('is-loading');
     if (waveformMessage) {
       waveformMessage.textContent = 'Generando forma de onda…';
@@ -985,9 +974,6 @@ async function ensureWaveform(track) {
       if (stored) {
         arrayBuffer = stored.buffer;
       } else if (track.isRemote || track.dropboxPath) {
-        if (state.downloadOnPlayOnly && !track._hasPlayed) {
-          return null;
-        }
         const ready = await ensureTrackRemoteLink(track);
         if (!ready) {
           return null;
@@ -1321,6 +1307,40 @@ minRatingSelect?.addEventListener('change', () => {
   persistLocalPlaylist();
 });
 
+// Búsqueda global
+globalSearchInput?.addEventListener('input', () => {
+  if (searchDebounce) {
+    clearTimeout(searchDebounce);
+  }
+  searchDebounce = setTimeout(() => {
+    performGlobalSearch(globalSearchInput.value);
+  }, 120);
+});
+
+globalSearchInput?.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    globalSearchInput.value = '';
+    clearSearchResults();
+  } else if (e.key === 'Enter') {
+    const first = searchResultsEl?.querySelector('li.search-result');
+    if (first) first.click();
+  }
+});
+
+searchResultsEl?.addEventListener('click', (e) => {
+  const li = e.target.closest('li.search-result');
+  if (!li) return;
+  const playlistId = li.dataset.playlistId;
+  const index = Number(li.dataset.index);
+  if (!playlistId || Number.isNaN(index)) return;
+  setActivePlaylist(playlistId);
+  // Pequeña pausa para asegurar render
+  setTimeout(() => {
+    playTrack(index).catch(console.error);
+    clearSearchResults();
+  }, 0);
+});
+
 playlistEl?.addEventListener('click', event => {
   const button = event.target.closest('button[data-action]');
   if (!button) {
@@ -1481,15 +1501,9 @@ dropboxDisconnectBtn?.addEventListener('click', () => {
   disconnectDropbox();
 });
 
-uploadOnPlayOnlyToggle?.addEventListener('change', () => {
-  state.uploadOnPlayOnly = !!uploadOnPlayOnlyToggle.checked;
-  persistLocalPlaylist();
-});
+// Opción "subir al reproducir" eliminada: no hay listener
 
-downloadOnPlayOnlyToggle?.addEventListener('change', () => {
-  state.downloadOnPlayOnly = !!downloadOnPlayOnlyToggle.checked;
-  persistLocalPlaylist();
-});
+// Opción "descargar solo al reproducir" eliminada: sin listener
 
 preferLocalSourceToggle?.addEventListener('change', () => {
   state.preferLocalSource = !!preferLocalSourceToggle.checked;
@@ -1785,10 +1799,7 @@ async function playTrack(index, options = {}) {
   }
   lastPrefetchForTrackId = null;
   // Marca para subir a Dropbox solo si se reproduce, si procede
-  if (state.uploadOnPlayOnly && !track.dropboxPath) {
-    track._shouldUpload = true;
-    requestDropboxSync();
-  }
+  // Política "subir al reproducir" eliminada: solo sincronización manual
   // Marca como reproducida para permitir descargas/forma de onda bajo política "solo al reproducir"
   track._hasPlayed = true;
   const { fade = true, fadeDurationOverride } = options;
@@ -2150,20 +2161,8 @@ function renderPlaylist() {
       flag.title = 'Guardado en Dropbox';
       flags.append(flag);
     }
-    if (state.uploadOnPlayOnly && !track.dropboxPath && track._shouldUpload) {
-      const flag = document.createElement('span');
-      flag.className = 'track-flag';
-      flag.textContent = '⏫';
-      flag.title = 'Se subirá a Dropbox al reproducir';
-      flags.append(flag);
-    }
-    if (state.downloadOnPlayOnly && (track.isRemote || track.dropboxPath) && !track._hasPlayed) {
-      const flag = document.createElement('span');
-      flag.className = 'track-flag';
-      flag.textContent = '⏬';
-      flag.title = 'Se descargará desde Dropbox al reproducir';
-      flags.append(flag);
-    }
+    // Indicador de subida al reproducir eliminado
+    // Indicador de descarga diferida eliminado
     if (flags.childElementCount > 0) {
       flags.style.marginLeft = '0.5rem';
       meta.append(' ', flags);
@@ -2244,6 +2243,46 @@ function renderPlaylist() {
   updatePagerUI();
 }
 
+function clearSearchResults() {
+  if (searchResultsEl) {
+    searchResultsEl.innerHTML = '';
+  }
+}
+
+function performGlobalSearch(query) {
+  if (!searchResultsEl) return;
+  const q = (query || '').trim().toLowerCase();
+  searchResultsEl.innerHTML = '';
+  if (!q) return;
+  const results = [];
+  for (const playlist of state.playlists) {
+    const tracks = Array.isArray(playlist.tracks) ? playlist.tracks : [];
+    for (let i = 0; i < tracks.length; i += 1) {
+      const t = tracks[i];
+      const name = (t.name || t.fileName || '').toLowerCase();
+      if (!name) continue;
+      if (name.includes(q)) {
+        results.push({ playlistId: playlist.id, playlistName: playlist.name, index: i, track: t });
+        if (results.length >= 100) break;
+      }
+    }
+    if (results.length >= 100) break;
+  }
+  for (const r of results) {
+    const li = document.createElement('li');
+    li.className = 'search-result';
+    li.dataset.playlistId = r.playlistId;
+    li.dataset.index = String(r.index);
+    const title = document.createElement('strong');
+    title.textContent = r.track.name || r.track.fileName || 'Pista';
+    const meta = document.createElement('span');
+    meta.style.marginLeft = '0.5rem';
+    meta.textContent = `— ${r.playlistName}`;
+    li.append(title, meta);
+    searchResultsEl.append(li);
+  }
+}
+
 function formatDuration(seconds) {
   if (!Number.isFinite(seconds)) {
     return '';
@@ -2267,8 +2306,6 @@ function persistLocalPlaylist() {
     fadeDuration: state.fadeDuration,
     autoLoop: state.autoLoop,
     shuffle: state.shuffle,
-    uploadOnPlayOnly: state.uploadOnPlayOnly,
-    downloadOnPlayOnly: state.downloadOnPlayOnly,
     preferLocalSource: state.preferLocalSource,
     playbackRate: state.playbackRate,
     normalizationEnabled: state.normalizationEnabled,
@@ -2320,22 +2357,8 @@ function loadLocalPlaylist() {
     if (typeof data?.shuffle === 'boolean') {
       state.shuffle = data.shuffle;
     }
-    if (typeof data?.uploadOnPlayOnly === 'boolean') {
-      state.uploadOnPlayOnly = data.uploadOnPlayOnly;
-      if (uploadOnPlayOnlyToggle) {
-        uploadOnPlayOnlyToggle.checked = state.uploadOnPlayOnly;
-      }
-    } else if (uploadOnPlayOnlyToggle) {
-      uploadOnPlayOnlyToggle.checked = false;
-    }
-    if (typeof data?.downloadOnPlayOnly === 'boolean') {
-      state.downloadOnPlayOnly = data.downloadOnPlayOnly;
-      if (downloadOnPlayOnlyToggle) {
-        downloadOnPlayOnlyToggle.checked = state.downloadOnPlayOnly;
-      }
-    } else if (downloadOnPlayOnlyToggle) {
-      downloadOnPlayOnlyToggle.checked = false;
-    }
+    // uploadOnPlayOnly eliminado: ignorar valor previo si existe
+    // downloadOnPlayOnly eliminado: ignorar valor previo si existe
     if (typeof data?.preferLocalSource === 'boolean') {
       state.preferLocalSource = data.preferLocalSource;
       if (preferLocalSourceToggle) {
@@ -2622,12 +2645,12 @@ async function performDropboxSync(options = {}) {
   dropboxState.isSyncing = true;
   dropboxState.error = null;
   // preparar progreso
-  const baseCandidates = getAllTracks().filter(track => !track.dropboxPath);
+  // Si es selección manual (onlyTrackIds), el subconjunto puede abarcar todas las listas.
+  // Si no, "Sincronizar ahora" debe afectar solo a la lista activa.
+  const scopeTracks = effective.onlyTrackIds ? getAllTracks() : (getActivePlaylist()?.tracks || state.tracks || []);
+  const baseCandidates = scopeTracks.filter(track => !track.dropboxPath);
   const isManualSubset = !!effective.onlyTrackIds;
   let candidates = isManualSubset ? baseCandidates.filter(t => effective.onlyTrackIds.includes(t.id)) : baseCandidates;
-  if (!isManualSubset && state.uploadOnPlayOnly) {
-    candidates = candidates.filter(t => t._shouldUpload);
-  }
   dropboxState.progressTotal = candidates.length;
   dropboxState.progressDone = 0;
   // marcar en cola
@@ -2897,9 +2920,6 @@ async function uploadOneTrackWithRetry(token, track) {
 
 async function uploadPendingTracks(token, list) {
   let candidates = Array.isArray(list) ? list : getAllTracks().filter(track => !track.dropboxPath);
-  if (state.uploadOnPlayOnly) {
-    candidates = candidates.filter(track => track._shouldUpload);
-  }
   if (!candidates.length) return;
 
   const CONCURRENCY = 1;
@@ -2936,8 +2956,6 @@ async function saveDropboxPlaylist(token) {
     fadeDuration: state.fadeDuration,
     autoLoop: state.autoLoop,
     shuffle: state.shuffle,
-    uploadOnPlayOnly: state.uploadOnPlayOnly,
-    downloadOnPlayOnly: state.downloadOnPlayOnly,
     playbackRate: state.playbackRate,
     normalizationEnabled: state.normalizationEnabled,
     playlists: state.playlists.map(playlist => ({
@@ -3193,18 +3211,8 @@ async function pullDropboxPlaylist(token) {
         state.normalizationEnabled = json.normalizationEnabled;
         if (normalizationToggle) normalizationToggle.checked = state.normalizationEnabled;
       }
-      if (typeof json.uploadOnPlayOnly === 'boolean') {
-        state.uploadOnPlayOnly = json.uploadOnPlayOnly;
-        if (uploadOnPlayOnlyToggle) {
-          uploadOnPlayOnlyToggle.checked = state.uploadOnPlayOnly;
-        }
-      }
-      if (typeof json.downloadOnPlayOnly === 'boolean') {
-        state.downloadOnPlayOnly = json.downloadOnPlayOnly;
-        if (downloadOnPlayOnlyToggle) {
-          downloadOnPlayOnlyToggle.checked = state.downloadOnPlayOnly;
-        }
-      }
+      // uploadOnPlayOnly eliminado; ignorar si viene en documentos antiguos
+      // downloadOnPlayOnly eliminado; ignorar si viene en documentos antiguos
       ensurePlaylistsInitialized();
       fadeValue.textContent = `${state.fadeDuration.toFixed(1).replace(/\.0$/, '')} s`;
       persistLocalPlaylist();
@@ -3350,8 +3358,8 @@ function applyRemoteDocumentToState(json) {
       if (loopToggle) loopToggle.checked = state.autoLoop;
     }
     if (typeof json.shuffle === 'boolean') state.shuffle = json.shuffle;
-    if (typeof json.uploadOnPlayOnly === 'boolean') state.uploadOnPlayOnly = json.uploadOnPlayOnly;
-    if (typeof json.downloadOnPlayOnly === 'boolean') state.downloadOnPlayOnly = json.downloadOnPlayOnly;
+    // uploadOnPlayOnly eliminado; ignorar
+    // downloadOnPlayOnly eliminado; ignorar
     ensurePlaylistsInitialized();
     fadeValue.textContent = `${state.fadeDuration.toFixed(1).replace(/\.0$/, '')} s`;
     persistLocalPlaylist();
@@ -3368,8 +3376,6 @@ function mergePlaylistDocuments(localDoc, remoteDoc) {
     fadeDuration: localDoc.fadeDuration ?? remoteDoc.fadeDuration ?? 3,
     autoLoop: typeof localDoc.autoLoop === 'boolean' ? localDoc.autoLoop : (remoteDoc.autoLoop ?? false),
     shuffle: typeof localDoc.shuffle === 'boolean' ? localDoc.shuffle : (remoteDoc.shuffle ?? false),
-    uploadOnPlayOnly: typeof localDoc.uploadOnPlayOnly === 'boolean' ? localDoc.uploadOnPlayOnly : (remoteDoc.uploadOnPlayOnly ?? false),
-    downloadOnPlayOnly: typeof localDoc.downloadOnPlayOnly === 'boolean' ? localDoc.downloadOnPlayOnly : (remoteDoc.downloadOnPlayOnly ?? false),
     playlists: [],
   };
   const mapRemote = new Map((remoteDoc.playlists || []).map(p => [p.id, p]));
@@ -3665,7 +3671,6 @@ async function ensureCoverArt(track) {
       if (stored?.buffer) {
         buffer = stored.buffer;
       } else if ((track.isRemote || track.dropboxPath)) {
-        if (state.downloadOnPlayOnly && !track._hasPlayed) return false;
         const ready = await ensureTrackRemoteLink(track);
         if (!ready) return false;
         // Prefer leer de IDB para no volver a descargar
@@ -4143,8 +4148,6 @@ async function saveDropboxSettings(token) {
     fadeDuration: state.fadeDuration,
     autoLoop: state.autoLoop,
     shuffle: state.shuffle,
-    uploadOnPlayOnly: state.uploadOnPlayOnly,
-    downloadOnPlayOnly: state.downloadOnPlayOnly,
     preferLocalSource: state.preferLocalSource,
     playbackRate: state.playbackRate,
     normalizationEnabled: state.normalizationEnabled,
@@ -4190,8 +4193,7 @@ async function pullDropboxSettings(token) {
   if (Number.isFinite(json.fadeDuration)) { state.fadeDuration = json.fadeDuration; if (fadeSlider) fadeSlider.value = String(json.fadeDuration); fadeValue.textContent = `${state.fadeDuration.toFixed(1).replace(/\.0$/, '')} s`; }
   if (typeof json.autoLoop === 'boolean') { state.autoLoop = json.autoLoop; if (loopToggle) loopToggle.checked = state.autoLoop; }
   if (typeof json.shuffle === 'boolean') state.shuffle = json.shuffle;
-  if (typeof json.uploadOnPlayOnly === 'boolean') { state.uploadOnPlayOnly = json.uploadOnPlayOnly; if (uploadOnPlayOnlyToggle) uploadOnPlayOnlyToggle.checked = state.uploadOnPlayOnly; }
-  if (typeof json.downloadOnPlayOnly === 'boolean') { state.downloadOnPlayOnly = json.downloadOnPlayOnly; if (downloadOnPlayOnlyToggle) downloadOnPlayOnlyToggle.checked = state.downloadOnPlayOnly; }
+  // downloadOnPlayOnly eliminado; ignorar
   if (typeof json.preferLocalSource === 'boolean') { state.preferLocalSource = json.preferLocalSource; if (preferLocalSourceToggle) preferLocalSourceToggle.checked = state.preferLocalSource; }
   if (Number.isFinite(json.playbackRate)) { state.playbackRate = Number(json.playbackRate) || 1; updateSpeedUI(); }
   if (typeof json.normalizationEnabled === 'boolean') { state.normalizationEnabled = json.normalizationEnabled; if (normalizationToggle) normalizationToggle.checked = state.normalizationEnabled; }
