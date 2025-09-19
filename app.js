@@ -2511,6 +2511,7 @@ function getCleanTrackName(track) {
   const raw = pickBestRawName(track);
   if (!raw) return '';
   let s = repairMojibake(raw);
+  s = applySpanishHeuristics(s);
   // quitar ruta si la hubiera
   s = s.split(/[/\\]/).pop();
   // quitar extensión común de audio
@@ -2579,6 +2580,24 @@ function repairMojibake(str) {
   } catch {
     return str;
   }
+}
+
+// Heurísticas en español para recuperar acentos/ñ cuando hay '�'
+function applySpanishHeuristics(str) {
+  if (!str) return str;
+  let s = String(str);
+  // i�n -> ión (y mayúsculas)
+  s = s.replace(/i�n/g, 'ión');
+  s = s.replace(/I�N/g, 'IÓN');
+  // '�' entre vocales => ñ (Señor, año, niño, mañana, baño, cañón, etc.)
+  s = s.replace(/([AEIOUÁÉÍÓÚaeiouáéíóú])�([AEIOUÁÉÍÓÚaeiouáéíóú])/g, (m, a, b) => {
+    const isUpper = a === a.toUpperCase() && b === b.toUpperCase();
+    return a + (isUpper ? 'Ñ' : 'ñ') + b;
+  });
+  // Inicio de palabra: "�" + vocal -> Ñ + vocal (DJ �aco -> DJ Ñaco)
+  s = s.replace(/(^|[\s\-\(\[])+�([aeiouáéíóú])/g, (m, pre, v) => (pre || '') + 'Ñ' + v);
+  s = s.replace(/(^|[\s\-\(\[])+�([AEIOUÁÉÍÓÚ])/g, (m, pre, v) => (pre || '') + 'Ñ' + v);
+  return s;
 }
 
 function persistLocalPlaylist() {
@@ -4022,7 +4041,7 @@ async function ensureCoverArt(track) {
     // Extraer título del ID3 si existe y actualizar nombre visible
     const tags = extractId3TextFrames(buffer);
     if (tags && tags.title) {
-      const clean = repairMojibake(tags.title).trim();
+      const clean = applySpanishHeuristics(repairMojibake(tags.title)).trim();
       if (clean && clean !== track.name) {
         track.name = clean;
         track.updatedAt = Date.now();
