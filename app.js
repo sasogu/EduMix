@@ -2508,18 +2508,62 @@ function formatDuration(seconds) {
 // Normaliza el título mostrado: quita carpetas, extensión y reemplaza '_' por espacios
 function getCleanTrackName(track) {
   if (!track) return '';
-  let raw = String(track.name || track.fileName || '').trim();
-  raw = repairMojibake(raw);
+  const raw = pickBestRawName(track);
   if (!raw) return '';
+  let s = repairMojibake(raw);
   // quitar ruta si la hubiera
-  raw = raw.split(/[/\\]/).pop();
+  s = s.split(/[/\\]/).pop();
   // quitar extensión común de audio
-  raw = raw.replace(/\.(mp3|m4a|aac|flac|wav|ogg|opus|oga|aiff|alac)$/i, '');
+  s = s.replace(/\.(mp3|m4a|aac|flac|wav|ogg|opus|oga|aiff|alac)$/i, '');
   // reemplazar guiones bajos por espacios
-  raw = raw.replace(/_/g, ' ');
+  s = s.replace(/_/g, ' ');
   // colapsar espacios múltiples y trim
-  raw = raw.replace(/\s+/g, ' ').trim();
-  return raw;
+  s = s.replace(/\s+/g, ' ').trim();
+  return s;
+}
+
+function isNameMojibake(str) {
+  return /[ÂÃ�]/.test(String(str || ''));
+}
+
+function nameQualityScore(str) {
+  if (!str) return -Infinity;
+  const s = String(str);
+  let score = 0;
+  const rep = (s.match(/�/g) || []).length;
+  const moj = (s.match(/[ÂÃ]/g) || []).length;
+  score -= rep * 100;
+  score -= moj * 10;
+  if (/[ñáéíóúüÑÁÉÍÓÚÜ]/.test(s)) score += 2;
+  // prefer strings without path separators
+  if (/[\/]/.test(s)) score -= 1;
+  return score;
+}
+
+function pickBestRawName(track) {
+  const candidates = [];
+  // provided name
+  if (track.name) candidates.push(String(track.name));
+  // file name
+  if (track.fileName) candidates.push(String(track.fileName));
+  // dropbox path basename
+  if (track.dropboxPath) {
+    const base = String(track.dropboxPath).split('/').pop();
+    if (base) candidates.push(base);
+  }
+  if (!candidates.length) return '';
+  // choose highest score after tentative repair
+  let best = candidates[0];
+  let bestScore = nameQualityScore(repairMojibake(best));
+  for (let i = 1; i < candidates.length; i += 1) {
+    const cand = candidates[i];
+    const score = nameQualityScore(repairMojibake(cand));
+    if (score > bestScore) {
+      best = cand;
+      bestScore = score;
+    }
+  }
+  return best;
 }
 
 // Intenta reparar mojibake común (UTF-8 interpretado como Latin-1)
@@ -3948,7 +3992,10 @@ function extractId3TextFrames(arrayBuffer) {
 
 async function ensureCoverArt(track) {
   try {
-    if (!track || track.coverUrl) return false;
+    // Si ya hay carátula pero el título parece roto, seguimos para intentar extraer el título ID3.
+    if (!track) return false;
+    const needTitleFix = isNameMojibake(track.name || '');
+    if (track.coverUrl && !needTitleFix) return false;
     let buffer = null;
     const file = pendingUploads.get(track.id);
     if (file) {
@@ -4322,6 +4369,15 @@ async function initialize() {
   }
   scheduleStorageStatsUpdate(0);
   updateSpeedUI();
+  // Lightbox handlers
+  // Reparar nombres con mojibake usando ID3 si es posible
+  try {
+    const broken = allTracks.filter(t => isNameMojibake(t.name || ''));
+    if (broken.length) {
+      broken.forEach(t => { ensureCoverArt(t).catch(() => {}); });
+    }
+  } catch {}
+  
   // Lightbox handlers
   coverArtImg?.addEventListener('click', () => {
     if (!coverArtImg.src) return;
