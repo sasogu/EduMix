@@ -198,6 +198,8 @@ function updateTimeDisplay(player) {
     const elapsed = Math.max(0, currentTime);
     timeDisplayEl.textContent = `${formatDuration(elapsed)}`;
   }
+  // Actualiza Media Session con la posición actual
+  updateMediaSessionPosition(player);
 }
 
 applyInitialTimeMode();
@@ -259,6 +261,7 @@ let waveformResizeFrame = null;
 // Prefetch de siguiente pista remota
 let lastPrefetchForTrackId = null;
 let storageStatsTimer = null;
+let mediaSessionSetup = false;
 
 const CROSS_FADE_MIN = 0.2;
 const TOKEN_REFRESH_MARGIN = 90 * 1000;
@@ -1523,6 +1526,7 @@ togglePlayBtn?.addEventListener('click', () => {
       .catch(console.error);
   }
   updateControls();
+  updateMediaSessionPlaybackState();
 });
 
 prevTrackBtn?.addEventListener('click', () => {
@@ -2118,6 +2122,8 @@ async function playTrack(index, options = {}) {
   updateNowPlaying();
   renderPlaylist();
   updateControls();
+  updateMediaSessionMetadata(track);
+  updateMediaSessionPlaybackState();
   scheduleAutoAdvance(nextPlayer, index);
 
   nextPlayer.audio.onended = () => {
@@ -2159,6 +2165,7 @@ function stopPlayback() {
   renderPlaylist();
   updateControls();
   setWaveformTrack(null);
+  updateMediaSessionPlaybackState();
 }
 
 function updateNowPlaying() {
@@ -2168,6 +2175,7 @@ function updateNowPlaying() {
     updateCoverArtDisplay(null);
     updateNowRatingUI();
     if (timeDisplayEl) timeDisplayEl.textContent = '—:—';
+    updateMediaSessionMetadata(null);
     return;
   }
   const duration = track.duration ? ` · ${formatDuration(track.duration)}` : '';
@@ -2177,6 +2185,7 @@ function updateNowPlaying() {
   }
   updateNowRatingUI();
   resetTimeDisplayForTrack(track);
+  updateMediaSessionMetadata(track);
 }
 
 function syncLoopToggle() {
@@ -4006,6 +4015,122 @@ function updatePagerUI() {
   pagerEl.hidden = false;
 }
 
+// === Media Session API integration (lock screen / notifications) ===
+function hasMediaSession() {
+  return typeof navigator !== 'undefined' && 'mediaSession' in navigator;
+}
+
+function setupMediaSession() {
+  if (!hasMediaSession() || mediaSessionSetup) return;
+  mediaSessionSetup = true;
+  const ms = navigator.mediaSession;
+  try { ms.setActionHandler('play', () => handleMediaPlay()); } catch {}
+  try { ms.setActionHandler('pause', () => handleMediaPause()); } catch {}
+  try { ms.setActionHandler('stop', () => stopPlayback()); } catch {}
+  try { ms.setActionHandler('previoustrack', () => { const i = getPrevIndex(); if (i !== -1) playTrack(i).catch(console.error); }); } catch {}
+  try { ms.setActionHandler('nexttrack', () => { const i = getNextIndex(); if (i !== -1) playTrack(i).catch(console.error); }); } catch {}
+  try { ms.setActionHandler('seekbackward', (details) => seekRelative(-(details?.seekOffset || 10))); } catch {}
+  try { ms.setActionHandler('seekforward', (details) => seekRelative(+(details?.seekOffset || 10))); } catch {}
+  try { ms.setActionHandler('seekto', (details) => seekTo(details?.seekTime)); } catch {}
+}
+
+function handleMediaPlay() {
+  if (state.currentIndex === -1) {
+    const start = getNextIndex();
+    if (start !== -1) {
+      playTrack(start).catch(console.error);
+    }
+    return;
+  }
+  const p = players[activePlayerIndex];
+  if (!p) return;
+  ensureContextRunning()
+    .then(() => p.audio.play())
+    .then(() => {
+      state.isPlaying = true;
+      scheduleAutoAdvance(p, state.currentIndex);
+      updateControls();
+      updateMediaSessionPlaybackState();
+    })
+    .catch(console.error);
+}
+
+function handleMediaPause() {
+  const p = players[activePlayerIndex];
+  if (!p) return;
+  p.audio.pause();
+  state.isPlaying = false;
+  cancelAutoAdvance(p);
+  updateControls();
+  updateMediaSessionPlaybackState();
+}
+
+function seekRelative(seconds) {
+  const p = players[activePlayerIndex];
+  if (!p) return;
+  if (!Number.isFinite(p.audio.currentTime)) return;
+  const dur = Number.isFinite(p.audio.duration) ? p.audio.duration : 0;
+  const next = Math.max(0, Math.min(dur || Infinity, (p.audio.currentTime || 0) + (Number(seconds) || 0)));
+  p.audio.currentTime = next;
+  updateMediaSessionPosition(p);
+}
+
+function seekTo(position) {
+  const p = players[activePlayerIndex];
+  if (!p || !Number.isFinite(position)) return;
+  const dur = Number.isFinite(p.audio.duration) ? p.audio.duration : 0;
+  const pos = Math.max(0, Math.min(dur || Infinity, Number(position)));
+  p.audio.currentTime = pos;
+  updateMediaSessionPosition(p);
+}
+
+function updateMediaSessionMetadata(track) {
+  if (!hasMediaSession()) return;
+  const t = track || state.tracks[state.currentIndex] || null;
+  if (!t) {
+    try { navigator.mediaSession.metadata = null; } catch {}
+    return;
+  }
+  const artwork = [];
+  if (t.coverUrl) artwork.push({ src: t.coverUrl, sizes: '512x512', type: 'image/png' });
+  artwork.push({ src: 'icons/icon-192.png', sizes: '192x192', type: 'image/png' });
+  artwork.push({ src: 'icons/icon-512.png', sizes: '512x512', type: 'image/png' });
+  try {
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: t.name || t.fileName || 'Pista',
+      artist: '',
+      album: 'EduMix',
+      artwork,
+    });
+  } catch {}
+}
+
+function updateMediaSessionPlaybackState() {
+  if (!hasMediaSession()) return;
+  try {
+    if (state.currentIndex === -1) {
+      navigator.mediaSession.playbackState = 'none';
+    } else {
+      navigator.mediaSession.playbackState = state.isPlaying ? 'playing' : 'paused';
+    }
+  } catch {}
+}
+
+function updateMediaSessionPosition(player) {
+  if (!hasMediaSession() || typeof navigator.mediaSession.setPositionState !== 'function') return;
+  const p = player || players[activePlayerIndex];
+  if (!p || !p.audio) return;
+  const duration = Number.isFinite(p.audio.duration) ? p.audio.duration : 0;
+  if (!duration) return;
+  try {
+    navigator.mediaSession.setPositionState({
+      duration,
+      playbackRate: Number(state.playbackRate) || 1,
+      position: Math.max(0, Number(p.audio.currentTime) || 0),
+    });
+  } catch {}
+}
+
 function updateSpeedUI() {
   const rate = Number(state.playbackRate) || 1;
   if (speedSlider && String(speedSlider.value) !== String(rate)) {
@@ -4064,6 +4189,9 @@ async function initialize() {
   await Promise.allSettled(allTracks.filter(track => !track.dropboxPath).map(track => ensureLocalTrackUrl(track)));
   renderPlaylist();
   updateControls();
+  setupMediaSession();
+  updateMediaSessionMetadata();
+  updateMediaSessionPlaybackState();
   scheduleWaveformResize();
   fadeValue.textContent = `${state.fadeDuration.toFixed(1).replace(/\.0$/, '')} s`;
   if (isDropboxConnected()) {
