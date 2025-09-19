@@ -2589,6 +2589,11 @@ function applySpanishHeuristics(str) {
   // i�n -> ión (y mayúsculas)
   s = s.replace(/i�n/g, 'ión');
   s = s.replace(/I�N/g, 'IÓN');
+  // a�n -> aún; e�n -> eón
+  s = s.replace(/a�n/g, 'aún');
+  s = s.replace(/A�N/g, 'AÚN');
+  s = s.replace(/e�n/g, 'eón');
+  s = s.replace(/E�N/g, 'EÓN');
   // '�' entre vocales => ñ (Señor, año, niño, mañana, baño, cañón, etc.)
   s = s.replace(/([AEIOUÁÉÍÓÚaeiouáéíóú])�([AEIOUÁÉÍÓÚaeiouáéíóú])/g, (m, a, b) => {
     const isUpper = a === a.toUpperCase() && b === b.toUpperCase();
@@ -2597,7 +2602,23 @@ function applySpanishHeuristics(str) {
   // Inicio de palabra: "�" + vocal -> Ñ + vocal (DJ �aco -> DJ Ñaco)
   s = s.replace(/(^|[\s\-\(\[])+�([aeiouáéíóú])/g, (m, pre, v) => (pre || '') + 'Ñ' + v);
   s = s.replace(/(^|[\s\-\(\[])+�([AEIOUÁÉÍÓÚ])/g, (m, pre, v) => (pre || '') + 'Ñ' + v);
+  // Final de palabra: estimar vocal acentuada a partir de la última vocal previa (Decid� -> Decidí)
+  s = s.replace(/([A-Za-zÁÉÍÓÚáéíóú]+)�\b/g, (m, word) => {
+    const lastVowel = (word.match(/[AaEeIiOoUuÁÉÍÓÚáéíóú](?!.*[AaEeIiOoUuÁÉÍÓÚáéíóú])/))?.[0] || '';
+    const accented = accentLike(lastVowel || 'i');
+    return word + accented;
+  });
   return s;
+}
+
+function accentLike(ch) {
+  const map = {
+    'a': 'á', 'e': 'é', 'i': 'í', 'o': 'ó', 'u': 'ú',
+    'A': 'Á', 'E': 'É', 'I': 'Í', 'O': 'Ó', 'U': 'Ú',
+    'á': 'á', 'é': 'é', 'í': 'í', 'ó': 'ó', 'ú': 'ú',
+    'Á': 'Á', 'É': 'É', 'Í': 'Í', 'Ó': 'Ó', 'Ú': 'Ú',
+  };
+  return map[ch] || 'í';
 }
 
 function persistLocalPlaylist() {
