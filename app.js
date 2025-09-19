@@ -853,6 +853,32 @@ function drawWaveform(peaks, progress = 0) {
   }
 }
 
+function handleWaveformClick(ev) {
+  try {
+    if (!waveformCanvas) return;
+    if (state.currentIndex === -1) return;
+    const p = players[activePlayerIndex];
+    if (!p || !p.audio) return;
+    const duration = Number.isFinite(p.audio.duration) ? p.audio.duration : 0;
+    if (!duration) return;
+    const rect = waveformCanvas.getBoundingClientRect();
+    const clientX = (ev && typeof ev.clientX === 'number') ? ev.clientX : (ev.touches && ev.touches[0] ? ev.touches[0].clientX : null);
+    if (clientX == null) return;
+    const x = Math.max(0, Math.min(rect.width, clientX - rect.left));
+    const ratio = rect.width ? (x / rect.width) : 0;
+    const target = Math.max(0, Math.min(duration - 0.05, ratio * duration));
+    p.audio.currentTime = target;
+    waveformState.progress = Math.max(0, Math.min(1, ratio));
+    if (waveformState.peaks && waveformState.peaks.length) {
+      drawWaveform(waveformState.peaks, waveformState.progress);
+    }
+    updateTimeDisplay(p);
+    updateMediaSessionPosition(p);
+  } catch (e) {
+    console.warn('seek via waveform failed', e);
+  }
+}
+
 function peekNextIndex() {
   if (state.autoLoop && state.currentIndex !== -1) {
     return state.currentIndex;
@@ -2178,8 +2204,7 @@ function updateNowPlaying() {
     updateMediaSessionMetadata(null);
     return;
   }
-  const duration = track.duration ? ` · ${formatDuration(track.duration)}` : '';
-  nowPlayingEl.textContent = `${track.name}${duration}`;
+  nowPlayingEl.textContent = getCleanTrackName(track);
   if (track.coverUrl) {
     updateCoverArtDisplay(track);
   }
@@ -2297,18 +2322,13 @@ function renderPlaylist() {
     thumb.src = track.coverUrl || getPlaceholderCover(48);
     thumb.hidden = false;
 
-    const title = document.createElement('div');
-    title.className = 'track-title';
-    const name = document.createElement('strong');
-    name.textContent = track.name;
-    const meta = document.createElement('span');
-    if (track.duration) {
-      meta.textContent = formatDuration(track.duration);
-    } else if (track.dropboxPath) {
-      meta.textContent = 'Guardado en Dropbox';
-    } else {
-      meta.textContent = track.fileName;
-    }
+  const title = document.createElement('div');
+  title.className = 'track-title';
+  const name = document.createElement('strong');
+  name.textContent = getCleanTrackName(track);
+  const meta = document.createElement('span');
+  // Meta: no mostrar duración ni carpeta; dejar vacío y usar solo para flags
+  meta.textContent = '';
     if (track._sync) {
       const status = document.createElement('span');
       status.className = 'badge';
@@ -2445,7 +2465,7 @@ function performGlobalSearch(query) {
     const info = document.createElement('div');
     info.className = 'result-info';
     const title = document.createElement('strong');
-    title.textContent = r.track.name || r.track.fileName || 'Pista';
+    title.textContent = getCleanTrackName(r.track) || 'Pista';
     const meta = document.createElement('span');
     meta.className = 'result-meta';
     const posText = `#${r.index + 1}`;
@@ -2483,6 +2503,22 @@ function formatDuration(seconds) {
     .toString()
     .padStart(2, '0');
   return `${mins}:${secs}`;
+}
+
+// Normaliza el título mostrado: quita carpetas, extensión y reemplaza '_' por espacios
+function getCleanTrackName(track) {
+  if (!track) return '';
+  let raw = String(track.name || track.fileName || '').trim();
+  if (!raw) return '';
+  // quitar ruta si la hubiera
+  raw = raw.split(/[/\\]/).pop();
+  // quitar extensión común de audio
+  raw = raw.replace(/\.(mp3|m4a|aac|flac|wav|ogg|opus|oga|aiff|alac)$/i, '');
+  // reemplazar guiones bajos por espacios
+  raw = raw.replace(/_/g, ' ');
+  // colapsar espacios múltiples y trim
+  raw = raw.replace(/\s+/g, ' ').trim();
+  return raw;
 }
 
 function persistLocalPlaylist() {
@@ -4097,7 +4133,7 @@ function updateMediaSessionMetadata(track) {
   artwork.push({ src: 'icons/icon-512.png', sizes: '512x512', type: 'image/png' });
   try {
     navigator.mediaSession.metadata = new MediaMetadata({
-      title: t.name || t.fileName || 'Pista',
+      title: getCleanTrackName(t) || 'Pista',
       artist: '',
       album: 'EduMix',
       artwork,
@@ -4193,6 +4229,11 @@ async function initialize() {
   updateMediaSessionMetadata();
   updateMediaSessionPlaybackState();
   scheduleWaveformResize();
+  // Click para buscar en la forma de onda
+  waveformCanvas?.addEventListener('click', (e) => {
+    e.preventDefault();
+    handleWaveformClick(e);
+  });
   fadeValue.textContent = `${state.fadeDuration.toFixed(1).replace(/\.0$/, '')} s`;
   if (isDropboxConnected()) {
     performDropboxSync({ loadRemote: true }).catch(console.error);
