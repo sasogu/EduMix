@@ -1330,18 +1330,84 @@ globalSearchInput?.addEventListener('keydown', (e) => {
   }
 });
 
+// Navegar, revelar y/o reproducir desde resultados de búsqueda
+function revealTrackInView(index) {
+  try {
+    const order = buildViewOrder();
+    const size = Math.max(0, Number(state.viewPageSize) || 0);
+    let pos = order.indexOf(index);
+    if (pos === -1) {
+      // Si está filtrada por valoración, restablecer filtro para poder mostrarla
+      const prevMin = state.viewMinRating;
+      const prevSort = state.viewSort;
+      state.viewMinRating = 0;
+      state.viewSort = 'none';
+      const fallback = buildViewOrder();
+      pos = fallback.indexOf(index);
+      // Mantener los nuevos filtros para que el usuario la vea
+      if (minRatingSelect) minRatingSelect.value = String(state.viewMinRating || 0);
+      if (sortSelect) sortSelect.value = state.viewSort || 'none';
+    }
+    if (pos === -1) return;
+    if (size) {
+      state.viewPageIndex = Math.floor(pos / size);
+    } else {
+      state.viewPageIndex = 0;
+    }
+    renderPlaylist();
+    // Resaltar y centrar el elemento
+    const item = playlistEl?.querySelector(`.track[data-index="${index}"]`);
+    if (item && typeof item.scrollIntoView === 'function') {
+      item.classList.add('is-highlighted');
+      item.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      setTimeout(() => item.classList.remove('is-highlighted'), 1600);
+    }
+  } catch (err) {
+    console.warn('No se pudo revelar la pista', err);
+  }
+}
+
+function goToTrackFromSearch(playlistId, index, { play = false, reveal = false } = {}) {
+  if (!playlistId || Number.isNaN(index)) return;
+  const willChangePlaylist = state.activePlaylistId !== playlistId;
+  setActivePlaylist(playlistId);
+  // Asegurar que el DOM se actualiza antes de acciones dependientes del render
+  setTimeout(() => {
+    if (reveal) {
+      revealTrackInView(index);
+    }
+    if (play) {
+      playTrack(index).catch(console.error);
+    }
+    if (play || reveal) {
+      clearSearchResults();
+    }
+  }, willChangePlaylist ? 0 : 0);
+}
+
 searchResultsEl?.addEventListener('click', (e) => {
+  const btn = e.target.closest('button[data-action]');
   const li = e.target.closest('li.search-result');
   if (!li) return;
   const playlistId = li.dataset.playlistId;
   const index = Number(li.dataset.index);
-  if (!playlistId || Number.isNaN(index)) return;
-  setActivePlaylist(playlistId);
-  // Pequeña pausa para asegurar render
-  setTimeout(() => {
-    playTrack(index).catch(console.error);
-    clearSearchResults();
-  }, 0);
+  if (btn) {
+    const action = btn.dataset.action;
+    if (action === 'play') {
+      e.preventDefault();
+      e.stopPropagation();
+      goToTrackFromSearch(playlistId, index, { play: true, reveal: false });
+      return;
+    }
+    if (action === 'reveal') {
+      e.preventDefault();
+      e.stopPropagation();
+      goToTrackFromSearch(playlistId, index, { play: false, reveal: true });
+      return;
+    }
+  }
+  // Click en toda la fila: reproducir como antes
+  goToTrackFromSearch(playlistId, index, { play: true, reveal: false });
 });
 
 playlistEl?.addEventListener('click', event => {
@@ -2354,12 +2420,35 @@ function performGlobalSearch(query) {
     li.className = 'search-result';
     li.dataset.playlistId = r.playlistId;
     li.dataset.index = String(r.index);
+
+    const info = document.createElement('div');
+    info.className = 'result-info';
     const title = document.createElement('strong');
     title.textContent = r.track.name || r.track.fileName || 'Pista';
     const meta = document.createElement('span');
-    meta.style.marginLeft = '0.5rem';
-    meta.textContent = `— ${r.playlistName}`;
-    li.append(title, meta);
+    meta.className = 'result-meta';
+    const posText = `#${r.index + 1}`;
+    const durationText = Number.isFinite(r.track.duration) ? ` • ${formatDuration(r.track.duration)}` : '';
+    meta.textContent = `${r.playlistName} • ${posText}${durationText}`;
+    info.append(title, meta);
+
+    const actions = document.createElement('div');
+    actions.className = 'result-actions';
+    const playBtn = document.createElement('button');
+    playBtn.className = 'ghost icon-button small';
+    playBtn.textContent = '▶';
+    playBtn.title = 'Reproducir';
+    playBtn.setAttribute('aria-label', 'Reproducir');
+    playBtn.dataset.action = 'play';
+    const revealBtn = document.createElement('button');
+    revealBtn.className = 'ghost icon-button small';
+    revealBtn.textContent = '🧭';
+    revealBtn.title = 'Ver en la lista';
+    revealBtn.setAttribute('aria-label', 'Ver en la lista');
+    revealBtn.dataset.action = 'reveal';
+    actions.append(playBtn, revealBtn);
+
+    li.append(info, actions);
     searchResultsEl.append(li);
   }
 }
