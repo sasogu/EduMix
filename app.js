@@ -16,6 +16,8 @@ const renamePlaylistBtn = document.getElementById('renamePlaylist');
 const deletePlaylistBtn = document.getElementById('deletePlaylist');
 const fadeSlider = document.getElementById('fadeSlider');
 const speedSlider = document.getElementById('speedSlider');
+const speedDownBtn = document.getElementById('speedDown');
+const speedUpBtn = document.getElementById('speedUp');
 const speedValue = document.getElementById('speedValue');
 const speedResetBtn = document.getElementById('speedReset');
 const fadeValue = document.getElementById('fadeValue');
@@ -1278,6 +1280,16 @@ speedResetBtn?.addEventListener('click', (e) => {
   state.playbackRate = 1;
   updateSpeedUI();
   persistLocalPlaylist();
+});
+
+// Botones +/- para ajustar velocidad
+speedDownBtn?.addEventListener('click', (e) => {
+  e.preventDefault();
+  nudgePlaybackRate(-0.01);
+});
+speedUpBtn?.addEventListener('click', (e) => {
+  e.preventDefault();
+  nudgePlaybackRate(0.01);
 });
 
 loopToggle?.addEventListener('change', () => {
