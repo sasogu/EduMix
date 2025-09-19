@@ -2509,6 +2509,7 @@ function formatDuration(seconds) {
 function getCleanTrackName(track) {
   if (!track) return '';
   let raw = String(track.name || track.fileName || '').trim();
+  raw = repairMojibake(raw);
   if (!raw) return '';
   // quitar ruta si la hubiera
   raw = raw.split(/[/\\]/).pop();
@@ -2519,6 +2520,21 @@ function getCleanTrackName(track) {
   // colapsar espacios múltiples y trim
   raw = raw.replace(/\s+/g, ' ').trim();
   return raw;
+}
+
+// Intenta reparar mojibake común (UTF-8 interpretado como Latin-1)
+function repairMojibake(str) {
+  try {
+    if (!str) return str;
+    const hasArtifacts = /[ÂÃ�]/.test(str);
+    if (!hasArtifacts) return str;
+    const fixed = decodeURIComponent(escape(str));
+    // Elegir si reduce caracteres problemáticos
+    const score = s => (s.match(/[ÂÃ�]/g) || []).length;
+    return score(fixed) <= score(str) ? fixed : str;
+  } catch {
+    return str;
+  }
 }
 
 function persistLocalPlaylist() {
@@ -3877,6 +3893,59 @@ function extractCoverArtFromArrayBuffer(arrayBuffer) {
   return null;
 }
 
+// ========== ID3 text (TIT2/TPE1/TALB) ==========
+function decodeId3Text(bytes, offset, size) {
+  if (size <= 1) return '';
+  const enc = bytes[offset];
+  const body = bytes.slice(offset + 1, offset + size);
+  let label = 'iso-8859-1';
+  if (enc === 1) label = 'utf-16';
+  else if (enc === 2) label = 'utf-16be';
+  else if (enc === 3) label = 'utf-8';
+  let text = '';
+  try { text = new TextDecoder(label, { fatal: false }).decode(body); } catch {}
+  return (text || '').replace(/\u0000+/g, '').trim();
+}
+
+function extractId3TextFrames(arrayBuffer) {
+  try {
+    const bytes = new Uint8Array(arrayBuffer);
+    if (bytes.length < 10) return null;
+    if (bytes[0] !== 0x49 || bytes[1] !== 0x44 || bytes[2] !== 0x33) return null;
+    const ver = bytes[3];
+    const flags = bytes[5];
+    const tagSize = readSynchsafeInt(bytes, 6) + 10;
+    let offset = 10;
+    if (flags & 0x40) {
+      if (ver === 4) {
+        const extSize = readSynchsafeInt(bytes, offset);
+        offset += 4 + extSize;
+      } else {
+        const extSize = readUInt32BE(bytes, offset);
+        offset += 4 + extSize;
+      }
+    }
+    const out = { title: '', artist: '', album: '' };
+    while (offset + 10 <= bytes.length && offset < tagSize) {
+      const frameId = String.fromCharCode(bytes[offset], bytes[offset + 1], bytes[offset + 2], bytes[offset + 3]);
+      let frameSize = ver === 4 ? readSynchsafeInt(bytes, offset + 4) : readUInt32BE(bytes, offset + 4);
+      offset += 10;
+      if (!frameId.trim() || frameSize <= 0) break;
+      if (offset + frameSize > bytes.length) break;
+      if (frameId === 'TIT2' || frameId === 'TPE1' || frameId === 'TALB') {
+        const val = decodeId3Text(bytes, offset, frameSize);
+        if (frameId === 'TIT2' && val) out.title = val;
+        if (frameId === 'TPE1' && val) out.artist = val;
+        if (frameId === 'TALB' && val) out.album = val;
+      }
+      offset += frameSize;
+    }
+    return out;
+  } catch {
+    return null;
+  }
+}
+
 async function ensureCoverArt(track) {
   try {
     if (!track || track.coverUrl) return false;
@@ -3903,6 +3972,19 @@ async function ensureCoverArt(track) {
       }
     }
     if (!buffer) return false;
+    // Extraer título del ID3 si existe y actualizar nombre visible
+    const tags = extractId3TextFrames(buffer);
+    if (tags && tags.title) {
+      const clean = repairMojibake(tags.title).trim();
+      if (clean && clean !== track.name) {
+        track.name = clean;
+        track.updatedAt = Date.now();
+        renderPlaylist();
+        updateNowPlaying();
+        persistLocalPlaylist();
+      }
+    }
+
     const art = extractCoverArtFromArrayBuffer(buffer);
     if (!art || !art.blob) return false;
     if (track.coverUrl) { try { URL.revokeObjectURL(track.coverUrl); } catch {} }
