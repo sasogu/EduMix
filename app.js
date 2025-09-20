@@ -4050,11 +4050,22 @@ async function pullDropboxPlaylist(token) {
             if (existingInfo) {
               track = existingInfo.track;
               localTrackMap.delete(entry.id);
-              if (typeof entry.name === 'string' && entry.name.length) {
-                track.name = entry.name;
-              }
-              if (typeof entry.userRenamed === 'boolean') {
-                track.userRenamed = track.userRenamed || entry.userRenamed;
+              // Merge de nombre con prioridad a cambios locales recientes o renombrados por usuario
+              const remoteHasName = typeof entry.name === 'string' && entry.name.length > 0;
+              const localRenamed = !!track.userRenamed;
+              const remoteRenamed = !!entry.userRenamed;
+              const localTs = Number(track.updatedAt || 0);
+              const remoteTs = Number(entry.updatedAt || 0);
+              if (remoteHasName) {
+                if (localRenamed && (!remoteRenamed || localTs >= remoteTs)) {
+                  // conservar local
+                } else if (remoteRenamed && remoteTs > localTs) {
+                  track.name = entry.name;
+                  track.userRenamed = true;
+                } else if (!localRenamed && remoteTs >= localTs) {
+                  track.name = entry.name;
+                  track.userRenamed = !!entry.userRenamed;
+                }
               }
               track.fileName = entry.fileName ?? track.fileName ?? track.name;
               if (Number.isFinite(entry.duration)) {
@@ -5207,11 +5218,22 @@ async function pullDropboxPlaylistsPerList(token) {
           if (!entry?.id) return;
           const existing = mapLocalTracks.get(entry.id)?.track;
           const track = existing ? existing : deserializeTrack(entry);
-          if (typeof entry.name === 'string' && entry.name.length) {
-            track.name = entry.name;
-          }
-          if (typeof entry.userRenamed === 'boolean') {
-            track.userRenamed = track.userRenamed || entry.userRenamed;
+          // Merge de nombre (ver bloque anterior)
+          const remoteHasName2 = typeof entry.name === 'string' && entry.name.length > 0;
+          const localRenamed2 = !!track.userRenamed;
+          const remoteRenamed2 = !!entry.userRenamed;
+          const localTs2 = Number(track.updatedAt || 0);
+          const remoteTs2 = Number(entry.updatedAt || 0);
+          if (remoteHasName2) {
+            if (localRenamed2 && (!remoteRenamed2 || localTs2 >= remoteTs2)) {
+              // keep local
+            } else if (remoteRenamed2 && remoteTs2 > localTs2) {
+              track.name = entry.name;
+              track.userRenamed = true;
+            } else if (!localRenamed2 && remoteTs2 >= localTs2) {
+              track.name = entry.name;
+              track.userRenamed = !!entry.userRenamed;
+            }
           }
           track.fileName = entry.fileName ?? track.fileName ?? track.name;
           if (Number.isFinite(entry.duration)) track.duration = entry.duration;
