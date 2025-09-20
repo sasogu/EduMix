@@ -58,6 +58,7 @@ const dropboxUsageEl = document.getElementById('dropboxUsage');
 const globalSearchInput = document.getElementById('globalSearch');
 const searchResultsEl = document.getElementById('searchResults');
 const clearLocalCopiesBtn = document.getElementById('clearLocalCopies');
+const dropboxTestConnBtn = document.getElementById('dropboxTestConn');
 const selectAllForSyncBtn = document.getElementById('selectAllForSync');
 const clearSelectedForSyncBtn = document.getElementById('clearSelectedForSync');
 const dropboxClearPendingBtn = document.getElementById('dropboxClearPending');
@@ -290,6 +291,8 @@ const dropboxState = {
   lastSync: null,
   error: null,
 };
+dropboxState.netStrikes = 0;
+dropboxState.pausedUntil = 0;
 dropboxState.progressTotal = 0;
 dropboxState.progressDone = 0;
 // Metadatos de playlist.json en Dropbox (control de versión)
@@ -1811,6 +1814,29 @@ dropboxClearPendingBtn?.addEventListener('click', async () => {
   }
 });
 
+// Probar conexión con Dropbox: distingue red bloqueada vs. OK
+dropboxTestConnBtn?.addEventListener('click', async () => {
+  try {
+    const res = await fetch('https://api.dropboxapi.com/2/check/user', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    });
+    if (res.ok || res.status === 401) {
+      // 401 sin token también significa que hay salida a la red
+      if (dropboxStatusEl) dropboxStatusEl.textContent = 'Conexión con Dropbox: OK';
+      cloudSyncCard?.classList.remove('is-error');
+    } else {
+      const t = await res.text().catch(() => '');
+      showDropboxError('Dropbox responde pero con error.');
+      console.debug('check/user response', res.status, t);
+    }
+  } catch (e) {
+    showDropboxError('Bloqueo de red/extension hacia Dropbox.');
+    console.debug('check/user failed', e);
+  }
+});
+
 // Botón rápido en el aviso de pendientes
 pendingSyncNowBtn?.addEventListener('click', () => {
   if (dropboxState.isSyncing) return;
@@ -3035,6 +3061,7 @@ function updateDropboxUI() {
   dropboxDisconnectBtn.hidden = false;
   dropboxSyncBtn.disabled = dropboxState.isSyncing;
   dropboxDisconnectBtn.disabled = dropboxState.isSyncing;
+  if (dropboxTestConnBtn) { dropboxTestConnBtn.hidden = false; dropboxTestConnBtn.disabled = dropboxState.isSyncing; }
   if (cloudOptionsEl) cloudOptionsEl.hidden = false;
   if (autoSyncToggle) autoSyncToggle.checked = !!state.autoSync;
   if (dropboxSyncSelectedBtn) {
@@ -3220,6 +3247,17 @@ async function performDropboxSync(options = {}) {
   if (!isDropboxConnected()) {
     return;
   }
+  // Guardas tempranas
+  if (!navigator.onLine) {
+    showDropboxError('Sin conexión. Conéctate a Internet.');
+    return;
+  }
+  const nowTs = Date.now();
+  if (Number(dropboxState.pausedUntil || 0) > nowTs) {
+    const secs = Math.ceil((dropboxState.pausedUntil - nowTs) / 1000);
+    showDropboxError(`Red inestable. Reintenta en ${secs}s.`);
+    return;
+  }
   const effective = {
     loadRemote: Boolean(options.loadRemote),
     onlyTrackIds: Array.isArray(options.onlyTrackIds) ? options.onlyTrackIds.slice() : null,
@@ -3270,10 +3308,20 @@ async function performDropboxSync(options = {}) {
       await saveDropboxPlaylist(token);
     }
     dropboxState.lastSync = Date.now();
+    dropboxState.netStrikes = 0;
   } catch (error) {
     console.error('Dropbox sync error', error);
     dropboxState.error = error;
     showDropboxError('No se pudo sincronizar con Dropbox.');
+    // Circuit breaker ante errores de red repetidos
+    if (isNetworkError(error)) {
+      dropboxState.netStrikes = (Number(dropboxState.netStrikes) || 0) + 1;
+      if (dropboxState.netStrikes >= 3) {
+        dropboxState.pausedUntil = Date.now() + 30000; // 30s
+      }
+    } else {
+      dropboxState.netStrikes = 0;
+    }
   } finally {
     dropboxState.isSyncing = false;
     dropboxState.progressTotal = 0;
@@ -3290,6 +3338,16 @@ async function performDropboxSync(options = {}) {
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function isNetworkError(err) {
+  if (!err) return false;
+  if (typeof err === 'string' && /NetworkError/i.test(err)) return true;
+  const name = err.name || '';
+  const msg = err.message || '';
+  if (/NetworkError/i.test(name) || /NetworkError/i.test(msg)) return true;
+  if (name === 'AbortError') return true; // timeout abort
+  return err instanceof TypeError; // fetch falló antes de llegar
 }
 
 async function awaitDropboxWriteWindow(minDelayMs = 0) {
