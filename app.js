@@ -1,5 +1,6 @@
 const playlistEl = document.getElementById('playlist');
 const filePicker = document.getElementById('filePicker');
+const filePickerFiles = document.getElementById('filePickerFiles');
 const togglePlayBtn = document.getElementById('togglePlay');
 const prevTrackBtn = document.getElementById('prevTrack');
 const nextTrackBtn = document.getElementById('nextTrack');
@@ -1357,6 +1358,14 @@ filePicker?.addEventListener('change', event => {
   }
   addTracks(files);
   filePicker.value = '';
+  scheduleStorageStatsUpdate();
+});
+
+filePickerFiles?.addEventListener('change', event => {
+  const files = Array.from(event.target.files || []);
+  if (!files.length) return;
+  addTracks(files);
+  filePickerFiles.value = '';
   scheduleStorageStatsUpdate();
 });
 
