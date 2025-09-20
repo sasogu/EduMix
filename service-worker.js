@@ -1,10 +1,10 @@
-const CACHE_NAME = 'edumix-cache-v1.0.8';
+const CACHE_NAME = 'edumix-cache-v1.0.9';
 const APP_SHELL = [
   './',
   './index.html',
   './styles.css',
   './app.js',
-  './app.js?v=1.0.8',
+  './app.js?v=1.0.9',
   './manifest.webmanifest',
   './icons/icon-192.png',
   './icons/icon-512.png',
