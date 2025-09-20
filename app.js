@@ -26,6 +26,8 @@ const themeToggle = document.getElementById('themeToggle');
 const timeModeToggle = document.getElementById('timeModeToggle');
 const loopToggle = document.getElementById('loopToggle');
 const dropboxStatusEl = document.getElementById('dropboxStatus');
+const dropboxProgressEl = document.getElementById('dropboxProgress');
+const dropboxProgressFillEl = document.getElementById('dropboxProgressFill');
 const dropboxConnectBtn = document.getElementById('dropboxConnect');
 const dropboxSyncBtn = document.getElementById('dropboxSync');
 const dropboxDisconnectBtn = document.getElementById('dropboxDisconnect');
@@ -3247,6 +3249,21 @@ function updateDropboxUI() {
     cloudSyncCard.classList.remove('is-error');
   }
   cloudSyncCard.classList.toggle('is-syncing', dropboxState.isSyncing);
+  // Barra de progreso visual
+  if (dropboxProgressEl && dropboxProgressFillEl) {
+    if (dropboxState.isSyncing && dropboxState.progressTotal > 0) {
+      const total = Math.max(1, Number(dropboxState.progressTotal) || 0);
+      const done = Math.max(0, Math.min(total, Number(dropboxState.progressDone) || 0));
+      const pct = Math.round((done / total) * 100);
+      dropboxProgressFillEl.style.width = pct + '%';
+      dropboxProgressEl.hidden = false;
+      dropboxProgressEl.setAttribute('aria-hidden', 'false');
+    } else {
+      dropboxProgressFillEl.style.width = '0%';
+      dropboxProgressEl.hidden = true;
+      dropboxProgressEl.setAttribute('aria-hidden', 'true');
+    }
+  }
   dropboxConnectBtn.hidden = true;
   dropboxSyncBtn.hidden = false;
   dropboxDisconnectBtn.hidden = false;
@@ -5219,6 +5236,8 @@ async function pullDropboxPlaylistsPerList(token) {
 
 async function saveDropboxPlaylistsPerList(token) {
   await ensurePlaylistsFolder(token);
+  // Evita repetir intentos de move_v2 en el mismo ciclo de vida
+  const moveTried = new Set();
   for (const pl of state.playlists) {
     const payload = {
       version: 2,
@@ -5233,20 +5252,26 @@ async function saveDropboxPlaylistsPerList(token) {
     const pathChanged = meta.path && meta.path !== desiredPath;
     const lcDesired = String(desiredPath).toLowerCase();
     const lcPrev = String(meta.path || '').toLowerCase();
-    // Si solo cambió el nombre (ruta), intenta un rename/move en Dropbox primero para no dejar duplicados
-    if (pathChanged && meta.path) {
+    // Si solo cambió el nombre (ruta), intenta un rename/move una vez
+    if (pathChanged && meta.path && lcDesired !== lcPrev && !moveTried.has(pl.id)) {
       try {
         const moveResp = await fetch('https://api.dropboxapi.com/2/files/move_v2', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
           body: JSON.stringify({ from_path: meta.path, to_path: desiredPath, autorename: false, allow_shared_folder: true, allow_ownership_transfer: false }),
         });
+        moveTried.add(pl.id);
         if (moveResp.ok) {
           const mv = await moveResp.json().catch(() => null);
           const md = mv && (mv.metadata || mv);
           const newRev = md?.rev || null;
           const serverModified = md?.server_modified || null;
           dropboxPerListMeta[pl.id] = { path: desiredPath, rev: newRev, serverModified };
+        } else if (moveResp.status === 409) {
+          // Conflicto: asume que el destino ya existe o el origen no existe
+          // Continúa con upload en desiredPath y marca el antiguo para borrar
+          dropboxPerListMeta[pl.id] = { path: desiredPath, rev: null, serverModified: null };
+          pendingDeletions.add(lcPrev);
         }
       } catch {}
     }

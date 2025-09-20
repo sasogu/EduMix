@@ -134,6 +134,9 @@
           <h3>Sincronización en la nube</h3>
           <span id="dropboxStatus" class="badge">Sin conectar</span>
         </div>
+        <div id="dropboxProgress" class="progress" hidden aria-hidden="true">
+          <div id="dropboxProgressFill" class="progress-fill"></div>
+        </div>
         <p class="cloud-hint">Conecta tu Dropbox para guardar y acceder a tus mezclas en cualquier dispositivo.</p>
         <div class="cloud-actions">
           <button id="dropboxConnect">Conectar con Dropbox</button>
@@ -167,10 +170,10 @@
   </main>
 
   <footer>
-    <p>EduMix v1.2.2</p>
+    <p>EduMix v1.2.3</p>
   </footer>
 
-  <script type="module" src="app.js?v=1.2.2"></script>
+  <script type="module" src="app.js?v=1.2.3"></script>
   <div id="coverLightbox" class="lightbox" hidden>
     <img id="coverLightboxImg" alt="Carátula ampliada" />
   </div>
