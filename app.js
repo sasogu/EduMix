@@ -232,6 +232,8 @@ const pendingUploads = new Map();
 let pendingDeletions = new Set();
 
 let dropboxAuth = loadDropboxAuth();
+// Preferencia por defecto: sincronización manual (no automática)
+const DROPBOX_AUTO_SYNC = false;
 const dropboxState = {
   isSyncing: false,
   syncQueued: null,
@@ -272,6 +274,8 @@ const IDB_CONFIG = {
   version: 1,
   store: 'tracks',
 };
+// Límite conservador por registro para evitar errores de tamaño en IndexedDB
+const IDB_MAX_VALUE_BYTES = 250 * 1024 * 1024; // ~250 MB
 let mediaDbPromise = null;
 
 function generateId(prefix) {
@@ -641,6 +645,11 @@ function openMediaDatabase() {
 async function storeTrackFile(id, file) {
   const db = await openMediaDatabase();
   if (!db) {
+    return;
+  }
+  const size = Number(file?.size || 0);
+  if (size > IDB_MAX_VALUE_BYTES) {
+    console.warn('Archivo demasiado grande para IndexedDB; se omite almacenamiento local', { id, size });
     return;
   }
   const buffer = await file.arrayBuffer();
@@ -1813,7 +1822,11 @@ function addTracks(files) {
         isRemote: false,
       };
       pendingUploads.set(track.id, file);
-      storeTrackFile(track.id, file).catch(console.error);
+      if (Number(file.size || 0) > IDB_MAX_VALUE_BYTES) {
+        track._localTooLarge = true;
+      } else {
+        storeTrackFile(track.id, file).catch(console.error);
+      }
       readDuration(track);
       return track;
     });
@@ -3899,6 +3912,10 @@ function disconnectDropbox() {
 
 function requestDropboxSync(options = {}) {
   if (!isDropboxConnected()) {
+    return;
+  }
+  if (!DROPBOX_AUTO_SYNC) {
+    // Sin auto-sync: solo sincroniza cuando el usuario pulsa los botones explícitos
     return;
   }
   performDropboxSync(options).catch(console.error);
