@@ -3320,6 +3320,10 @@ async function performDropboxSync(options = {}) {
     }
     await uploadPendingTracks(token, candidates);
     await processPendingDeletions(token);
+    // Si aún quedan pendientes tras el batch, intenta borrarlos uno a uno (delete_v2)
+    if (pendingDeletions && pendingDeletions.size > 0) {
+      await forceDeleteRemainder(token).catch(() => {});
+    }
     if (perListAvailable) {
       await saveDropboxPlaylistsPerList(token);
       await saveDropboxSettings(token).catch(() => {});
@@ -3367,6 +3371,58 @@ function isNetworkError(err) {
   if (/NetworkError/i.test(name) || /NetworkError/i.test(msg)) return true;
   if (name === 'AbortError') return true; // timeout abort
   return err instanceof TypeError; // fetch falló antes de llegar
+}
+
+// Borrado individual de pendientes (delete_v2) para rutas que no lograron eliminarse en batch
+async function forceDeleteRemainder(token) {
+  const arr = Array.from(pendingDeletions || []);
+  if (!arr.length) return;
+  const CHUNK = 80;
+  for (let i = 0; i < arr.length; i += CHUNK) {
+    const slice = arr.slice(i, i + CHUNK);
+    for (const path of slice) {
+      let attempt = 0;
+      const maxRetries = 5;
+      while (attempt <= maxRetries) {
+        try {
+          await awaitDropboxWriteWindow();
+          const resp = await fetch('https://api.dropboxapi.com/2/files/delete_v2', {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path }),
+          });
+          if (resp.ok) {
+            pendingDeletions.delete(String(path).toLowerCase());
+            break;
+          }
+          const txt = await resp.text().catch(() => '');
+          if (resp.status === 401 && attempt < maxRetries) {
+            const fresh = await ensureDropboxToken(true);
+            if (fresh) { attempt += 1; continue; }
+          }
+          if (resp.status === 409 && /not_found|path_lookup/i.test(txt)) {
+            pendingDeletions.delete(String(path).toLowerCase());
+            break;
+          }
+          const retrySeconds = parseDropboxRetryInfo(resp.status, resp.headers, txt);
+          if (retrySeconds && attempt < maxRetries) {
+            dropboxWriteAvailableAt = Date.now() + retrySeconds * 1000;
+            await sleep(retrySeconds * 1000 + Math.random() * 250);
+            attempt += 1;
+            continue;
+          }
+          break;
+        } catch {
+          if (attempt >= maxRetries) break;
+          await sleep(Math.min(16000, 1000 * Math.pow(2, attempt)) + Math.random() * 300);
+          attempt += 1;
+        }
+      }
+    }
+    persistLocalPlaylist();
+    updateDropboxUI();
+    await sleep(150);
+  }
 }
 
 async function awaitDropboxWriteWindow(minDelayMs = 0) {
