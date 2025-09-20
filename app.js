@@ -129,6 +129,12 @@ const dropboxConfig = {
 
 dropboxConfig.redirectUri = `${window.location.origin}${window.location.pathname}`;
 
+// ===== Control de concurrencia y backoff para lecturas Dropbox =====
+let dropboxReadAvailableAt = 0;
+let dropboxReadInFlight = 0;
+const DROPBOX_READ_CONCURRENCY = 2;
+const remoteLinkInFlight = new Map(); // track.id -> Promise<boolean>
+
 const state = {
   playlists: [],
   activePlaylistId: null,
@@ -2176,6 +2182,21 @@ async function ensureTrackRemoteLink(track) {
   if (track.url && track.url.startsWith('blob:')) {
     return true;
   }
+  // Evitar reintentos inmediatos si hay cooldown por error previo
+  if (track._remoteRetryAt && now < track._remoteRetryAt) {
+    return false;
+  }
+  // Reutiliza petición en curso por pista
+  if (remoteLinkInFlight.has(track.id)) {
+    try { return await remoteLinkInFlight.get(track.id); } finally {}
+  }
+  // Respetar ventana global de lectura y concurrencia
+  if (now < dropboxReadAvailableAt || dropboxReadInFlight >= DROPBOX_READ_CONCURRENCY) {
+    return false;
+  }
+  dropboxReadInFlight += 1;
+  const done = (result) => { dropboxReadInFlight = Math.max(0, dropboxReadInFlight - 1); return result; };
+  const run = (async () => {
   const token = await ensureDropboxToken();
   if (!token) {
     showDropboxError('Debes volver a conectar tu Dropbox.');
@@ -2207,6 +2228,14 @@ async function ensureTrackRemoteLink(track) {
       })();
       const errorInfo = new Error(summary || 'No se pudo obtener enlace temporal');
       errorInfo.responseStatus = response.status;
+      // Backoff básico ante 429/503 o señales de rate limit
+      try {
+        const retrySec = parseDropboxRetryInfo(response.status, response.headers, details);
+        if (retrySec > 0) {
+          dropboxReadAvailableAt = Date.now() + retrySec * 1000;
+          track._remoteRetryAt = Date.now() + Math.min(60000, retrySec * 1200);
+        }
+      } catch {}
       throw errorInfo;
     }
     const data = await response.json();
@@ -2241,7 +2270,12 @@ async function ensureTrackRemoteLink(track) {
       showDropboxError('No se pudo obtener el audio desde Dropbox.');
     }
     return false;
+  } finally {
+    remoteLinkInFlight.delete(track.id);
   }
+  })();
+  remoteLinkInFlight.set(track.id, run);
+  try { return await run; } finally { done(); }
 }
 
 async function playTrack(index, options = {}) {
@@ -4517,6 +4551,14 @@ async function ensureCoverArt(track) {
       if (stored?.buffer) {
         buffer = stored.buffer;
       } else if ((track.isRemote || track.dropboxPath)) {
+        // Evitar tormenta de peticiones si hay backoff o concurrencia llena
+        const now = Date.now();
+        if ((now < dropboxReadAvailableAt) || dropboxReadInFlight >= DROPBOX_READ_CONCURRENCY) {
+          return false;
+        }
+        if (remoteLinkInFlight.has(track.id)) {
+          return false;
+        }
         const ready = await ensureTrackRemoteLink(track);
         if (!ready) return false;
         // Prefer leer de IDB para no volver a descargar
