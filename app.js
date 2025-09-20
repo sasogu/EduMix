@@ -594,6 +594,7 @@ function serializeTrack(track) {
   return {
     id: track.id,
     name: track.name,
+    userRenamed: !!track.userRenamed,
     fileName: track.fileName,
     duration: track.duration,
     updatedAt: track.updatedAt ?? null,
@@ -614,6 +615,7 @@ function serializeTrackLocal(track) {
   return {
     id: track.id,
     name: track.name,
+    userRenamed: !!track.userRenamed,
     fileName: track.fileName,
     duration: track.duration,
     updatedAt: track.updatedAt ?? null,
@@ -633,6 +635,7 @@ function deserializeTrack(entry) {
   return {
     id: entry.id,
     name: entry.name,
+    userRenamed: !!entry.userRenamed,
     fileName: entry.fileName ?? entry.name,
     url: null,
     duration: entry.duration ?? null,
@@ -2165,6 +2168,8 @@ function renameTrack(index) {
     return;
   }
   track.name = nextName;
+  // Marca para no sobreescribir con títulos ID3 automáticamente
+  track.userRenamed = true;
   track.updatedAt = Date.now();
   const active = getActivePlaylist();
   if (active) active.updatedAt = Date.now();
@@ -3994,7 +3999,12 @@ async function pullDropboxPlaylist(token) {
             if (existingInfo) {
               track = existingInfo.track;
               localTrackMap.delete(entry.id);
-              track.name = entry.name || track.name;
+              if (typeof entry.name === 'string' && entry.name.length) {
+                track.name = entry.name;
+              }
+              if (typeof entry.userRenamed === 'boolean') {
+                track.userRenamed = track.userRenamed || entry.userRenamed;
+              }
               track.fileName = entry.fileName ?? track.fileName ?? track.name;
               if (Number.isFinite(entry.duration)) {
                 track.duration = entry.duration;
@@ -4647,7 +4657,7 @@ async function ensureCoverArt(track) {
     if (!buffer) return false;
     // Extraer título del ID3 si existe y actualizar nombre visible
     const tags = extractId3TextFrames(buffer);
-    if (tags && tags.title) {
+    if (tags && tags.title && !track.userRenamed) {
       const clean = applySpanishHeuristics(repairMojibake(tags.title)).trim();
       if (clean && clean !== track.name) {
         track.name = clean;
@@ -5146,7 +5156,12 @@ async function pullDropboxPlaylistsPerList(token) {
           if (!entry?.id) return;
           const existing = mapLocalTracks.get(entry.id)?.track;
           const track = existing ? existing : deserializeTrack(entry);
-          track.name = entry.name || track.name;
+          if (typeof entry.name === 'string' && entry.name.length) {
+            track.name = entry.name;
+          }
+          if (typeof entry.userRenamed === 'boolean') {
+            track.userRenamed = track.userRenamed || entry.userRenamed;
+          }
           track.fileName = entry.fileName ?? track.fileName ?? track.name;
           if (Number.isFinite(entry.duration)) track.duration = entry.duration;
           if (Number.isFinite(entry.normalizationGain)) track.normalizationGain = entry.normalizationGain;
