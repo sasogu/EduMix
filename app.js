@@ -3096,8 +3096,13 @@ function updateDropboxUI() {
   }
   if (dropboxClearPendingBtn) {
     const hasPend = (pendingDeletions && pendingDeletions.size > 0);
-    dropboxClearPendingBtn.hidden = !hasPend;
+    dropboxClearPendingBtn.hidden = false;
     dropboxClearPendingBtn.disabled = dropboxState.isSyncing || !hasPend;
+  }
+  if (typeof dropboxForceDeleteBtn !== 'undefined' && dropboxForceDeleteBtn) {
+    const hasPend = (pendingDeletions && pendingDeletions.size > 0);
+    dropboxForceDeleteBtn.hidden = false;
+    dropboxForceDeleteBtn.disabled = dropboxState.isSyncing || !hasPend;
   }
 
   // Aviso de cambios pendientes en modo manual
