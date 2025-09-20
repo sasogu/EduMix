@@ -572,16 +572,64 @@ function openMediaDatabase() {
   if (mediaDbPromise) {
     return mediaDbPromise;
   }
-  mediaDbPromise = new Promise((resolve, reject) => {
-    const request = indexedDB.open(IDB_CONFIG.name, IDB_CONFIG.version);
-    request.onerror = () => reject(request.error);
-    request.onupgradeneeded = () => {
-      const db = request.result;
-      if (!db.objectStoreNames.contains(IDB_CONFIG.store)) {
-        db.createObjectStore(IDB_CONFIG.store, { keyPath: 'id' });
-      }
+  mediaDbPromise = new Promise((resolve) => {
+    // Intento 1: abrir sin especificar versión para evitar VersionError si la DB es más nueva
+    const tryOpenNoVersion = () => {
+      let req;
+      try { req = indexedDB.open(IDB_CONFIG.name); } catch (e) { tryOpenWithVersion(IDB_CONFIG.version); return; }
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        try {
+          if (!db.objectStoreNames.contains(IDB_CONFIG.store)) {
+            db.createObjectStore(IDB_CONFIG.store, { keyPath: 'id' });
+          }
+        } catch {}
+      };
+      req.onsuccess = () => {
+        const db = req.result;
+        try {
+          if (!db.objectStoreNames.contains(IDB_CONFIG.store)) {
+            // Necesitamos crear el store: subir versión al menos en +1
+            const targetVersion = Math.max(IDB_CONFIG.version || 1, (db.version || 1) + 1);
+            try { db.close(); } catch {}
+            const req2 = indexedDB.open(IDB_CONFIG.name, targetVersion);
+            req2.onupgradeneeded = () => {
+              const db2 = req2.result;
+              try {
+                if (!db2.objectStoreNames.contains(IDB_CONFIG.store)) {
+                  db2.createObjectStore(IDB_CONFIG.store, { keyPath: 'id' });
+                }
+              } catch {}
+            };
+            req2.onsuccess = () => resolve(req2.result);
+            req2.onerror = () => resolve(null);
+          } else {
+            resolve(db);
+          }
+        } catch {
+          resolve(db);
+        }
+      };
+      req.onerror = () => {
+        tryOpenWithVersion(IDB_CONFIG.version);
+      };
     };
-    request.onsuccess = () => resolve(request.result);
+    // Intento 2: abrir con versión solicitada (para DBs viejas o inexistentes)
+    const tryOpenWithVersion = (version) => {
+      let req;
+      try { req = indexedDB.open(IDB_CONFIG.name, version); } catch (e) { resolve(null); return; }
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        try {
+          if (!db.objectStoreNames.contains(IDB_CONFIG.store)) {
+            db.createObjectStore(IDB_CONFIG.store, { keyPath: 'id' });
+          }
+        } catch {}
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => resolve(null);
+    };
+    tryOpenNoVersion();
   }).catch(error => {
     console.error('IndexedDB init error', error);
     mediaDbPromise = null;
