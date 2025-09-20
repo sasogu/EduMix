@@ -2032,10 +2032,12 @@ pagerNextBtn?.addEventListener('click', () => {
   persistLocalPlaylist();
 });
 
-dropboxRetryFailedBtn?.addEventListener('click', () => {
+dropboxRetryFailedBtn?.addEventListener('click', async () => {
   if (dropboxState.isSyncing) return;
   const failed = getAllTracks().filter(t => !t.dropboxPath && t._sync === 'error');
   if (!failed.length) return;
+  // Intenta rehidratar URL local desde IndexedDB/pendingUploads
+  await Promise.allSettled(failed.map(t => ensureLocalTrackUrl(t)));
   failed.forEach(t => { t._sync = 'queued'; });
   renderPlaylist();
   performDropboxSync({ loadRemote: false, onlyTrackIds: failed.map(t => t.id) }).catch(console.error);
