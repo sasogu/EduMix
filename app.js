@@ -2349,8 +2349,21 @@ async function ensureTrackRemoteLink(track) {
     return true;
   } catch (error) {
     console.error('Error obteniendo enlace temporal', error);
-    if (typeof error?.message === 'string' && error.message.includes('not_found')) {
-      showDropboxError('No se encontró el archivo en Dropbox, intenta sincronizar de nuevo.');
+    const msg = String(error?.message || '');
+    const status = Number(error?.responseStatus || 0);
+    if (/not_found/i.test(msg) || status === 409) {
+      // El archivo no existe en Dropbox (o conflicto al consultar). Pasar a modo local y re-encolar subida.
+      track.dropboxPath = null;
+      track.dropboxRev = null;
+      track.dropboxSize = null;
+      track.dropboxUpdatedAt = null;
+      track.isRemote = false;
+      track.urlExpiresAt = 0;
+      track._sync = 'queued';
+      persistLocalPlaylist();
+      updateDropboxUI();
+      requestDropboxSync({ loadRemote: false, onlyTrackIds: [track.id] });
+      showDropboxError('Archivo no encontrado en Dropbox. Re-subiendo desde copia local.');
     } else {
       showDropboxError('No se pudo obtener el audio desde Dropbox.');
     }
