@@ -41,6 +41,7 @@ const pendingNoticeTextEl = document.getElementById('dropboxPendingText');
 const pendingSyncNowBtn = document.getElementById('dropboxPendingSyncNow');
 // Declarado para evitar ReferenceError en usos con optional chaining
 const dropboxRetryFailedBtn = document.getElementById('dropboxRetryFailed');
+const dropboxDeleteFailedBtn = document.getElementById('dropboxDeleteFailed');
 const cloudSyncCard = document.querySelector('.cloud-sync');
 const waveformCanvas = document.getElementById('waveformCanvas');
 const waveformMessage = document.getElementById('waveformMessage');
@@ -2043,6 +2044,42 @@ dropboxRetryFailedBtn?.addEventListener('click', async () => {
   performDropboxSync({ loadRemote: false, onlyTrackIds: failed.map(t => t.id) }).catch(console.error);
 });
 
+dropboxDeleteFailedBtn?.addEventListener('click', async () => {
+  if (dropboxState.isSyncing) return;
+  const failed = getAllTracks().filter(t => !t.dropboxPath && t._sync === 'error');
+  if (!failed.length) return;
+  const failedIds = new Set(failed.map(t => t.id));
+  // Limpieza de blobs e IndexedDB
+  for (const t of failed) {
+    try { if (t.url && t.url.startsWith('blob:')) URL.revokeObjectURL(t.url); } catch {}
+    pendingUploads.delete(t.id);
+    try { await deleteTrackFile(t.id); } catch {}
+  }
+  // Eliminar de todas las listas
+  state.playlists.forEach(pl => {
+    const before = pl.tracks.length;
+    if (!before) return;
+    pl.tracks = pl.tracks.filter(tr => !failedIds.has(tr.id));
+    if (pl.tracks.length !== before) {
+      pl.updatedAt = Date.now();
+    }
+  });
+  // Ajustar selección y reproducción
+  selectedForSync = new Set(Array.from(selectedForSync).filter(id => !failedIds.has(id)));
+  if (state.currentIndex >= 0 && state.tracks[state.currentIndex] && failedIds.has(state.tracks[state.currentIndex].id)) {
+    stopPlayback();
+    state.currentIndex = -1;
+    setWaveformTrack(null);
+  }
+  // Refrescar vista/estado
+  syncTracksFromActivePlaylist();
+  renderPlaylist();
+  updateControls();
+  persistLocalPlaylist();
+  scheduleStorageStatsUpdate();
+  updateDropboxUI();
+});
+
 function addTracks(files) {
   const audioFiles = files
     .filter(file => file.type.startsWith('audio/'))
@@ -3280,10 +3317,16 @@ function updateDropboxUI() {
     const count = Array.from(selectedForSync).filter(id => validIds.has(id)).length;
     dropboxSyncSelectedBtn.disabled = dropboxState.isSyncing || count === 0;
   }
-  if (dropboxRetryFailedBtn) {
+  if (dropboxRetryFailedBtn || dropboxDeleteFailedBtn) {
     const hasFailed = hasFailedUploads();
-    dropboxRetryFailedBtn.hidden = !hasFailed;
-    dropboxRetryFailedBtn.disabled = dropboxState.isSyncing || !hasFailed;
+    if (dropboxRetryFailedBtn) {
+      dropboxRetryFailedBtn.hidden = !hasFailed;
+      dropboxRetryFailedBtn.disabled = dropboxState.isSyncing || !hasFailed;
+    }
+    if (dropboxDeleteFailedBtn) {
+      dropboxDeleteFailedBtn.hidden = !hasFailed;
+      dropboxDeleteFailedBtn.disabled = dropboxState.isSyncing || !hasFailed;
+    }
   }
   if (dropboxClearPendingBtn) {
     const hasPend = (pendingDeletions && pendingDeletions.size > 0);
