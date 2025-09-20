@@ -4158,14 +4158,15 @@ async function processPendingDeletions(token) {
   if (!pendingDeletions.size) {
     return;
   }
-  // No intentar borrar JSON de listas que están activas (paths deseados actuales)
+  // Normalizar a minúsculas y evitar borrar JSON de listas activas (paths deseados actuales)
   try {
+    // Normaliza todo el set a minúsculas para evitar duplicados por casing
+    pendingDeletions = new Set(Array.from(pendingDeletions).map(p => String(p).toLowerCase()));
     const desiredSet = new Set((state.playlists || []).map(pl => String(getPlaylistPath(pl)).toLowerCase()));
     Array.from(pendingDeletions).forEach(p => {
-      const lp = String(p).toLowerCase();
-      if (desiredSet.has(lp)) {
-        try { console.debug('[DELETE] omitir activo', lp); } catch {}
-        pendingDeletions.delete(lp);
+      if (desiredSet.has(p)) {
+        try { console.debug('[DELETE] omitir activo', p); } catch {}
+        pendingDeletions.delete(p);
       }
     });
   } catch {}
