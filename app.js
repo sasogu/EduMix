@@ -115,6 +115,7 @@ const STORAGE_KEYS = {
   timeMode: 'edumix-time-mode', // 'elapsed' | 'remaining'
   dropboxPending: 'edumix-dropbox-pending-deletions',
   dropboxPerListMeta: 'edumix-dropbox-perlist-meta',
+  viewPerList: 'edumix-view-per-list',
 };
 
 const dropboxConfig = {
@@ -312,6 +313,9 @@ let dropboxSettingsMeta = { rev: null, serverModified: null };
 // Ventana global para evitar saturar el límite de escrituras de Dropbox
 let dropboxWriteAvailableAt = 0;
 
+// Preferencias de vista por lista (id -> { pageSize, pageIndex, sort, minRating })
+let viewPerList = {};
+
 const waveformState = {
   trackId: null,
   peaks: null,
@@ -378,6 +382,20 @@ function ensurePlaylistsInitialized() {
   renderPlaylistPicker();
 }
 
+function loadActiveViewPrefs() {
+  try {
+    const id = state.activePlaylistId;
+    if (!id) return;
+    const vp = viewPerList && typeof viewPerList === 'object' ? viewPerList[id] : null;
+    if (vp && typeof vp === 'object') {
+      if (Number.isFinite(vp.pageSize)) state.viewPageSize = Math.max(0, Number(vp.pageSize));
+      if (Number.isFinite(vp.pageIndex)) state.viewPageIndex = Math.max(0, Number(vp.pageIndex));
+      if (typeof vp.sort === 'string') state.viewSort = vp.sort;
+      if (Number.isFinite(vp.minRating)) state.viewMinRating = Math.max(0, Math.min(5, Number(vp.minRating)));
+    }
+  } catch {}
+}
+
 function renderPlaylistPicker() {
   if (!playlistPicker) {
     return;
@@ -393,6 +411,8 @@ function renderPlaylistPicker() {
   const targetValue = state.activePlaylistId || previous || (state.playlists[0] && state.playlists[0].id) || '';
   playlistPicker.value = targetValue;
   playlistPicker.disabled = state.playlists.length <= 1;
+  // Al actualizar el selector, intenta aplicar la vista específica de esa lista
+  try { loadActiveViewPrefs(); } catch {}
   if (pageSizeSelect) {
     pageSizeSelect.value = String(state.viewPageSize || 0);
   }
@@ -481,6 +501,8 @@ function setActivePlaylist(id) {
   stopPlayback();
   state.activePlaylistId = id;
   syncTracksFromActivePlaylist();
+  // Cargar preferencias específicas de esta lista
+  loadActiveViewPrefs();
   state.currentIndex = -1;
   renderPlaylist();
   updateControls();
@@ -1448,6 +1470,10 @@ pageSizeSelect?.addEventListener('change', () => {
   const val = Number(pageSizeSelect.value) || 0;
   state.viewPageSize = Math.max(0, val);
   state.viewPageIndex = 0;
+  const id = state.activePlaylistId;
+  if (id) {
+    viewPerList[id] = { ...(viewPerList[id] || {}), pageSize: state.viewPageSize, pageIndex: state.viewPageIndex, sort: state.viewSort, minRating: state.viewMinRating };
+  }
   renderPlaylist();
   persistLocalPlaylist();
 });
@@ -1456,6 +1482,10 @@ sortSelect?.addEventListener('change', () => {
   const val = String(sortSelect.value || 'none');
   state.viewSort = val;
   state.viewPageIndex = 0;
+  const id = state.activePlaylistId;
+  if (id) {
+    viewPerList[id] = { ...(viewPerList[id] || {}), sort: state.viewSort, pageIndex: state.viewPageIndex, pageSize: state.viewPageSize, minRating: state.viewMinRating };
+  }
   renderPlaylist();
   persistLocalPlaylist();
 });
@@ -1464,6 +1494,10 @@ minRatingSelect?.addEventListener('change', () => {
   const val = Number(minRatingSelect.value) || 0;
   state.viewMinRating = Math.max(0, Math.min(5, val));
   state.viewPageIndex = 0;
+  const id = state.activePlaylistId;
+  if (id) {
+    viewPerList[id] = { ...(viewPerList[id] || {}), minRating: state.viewMinRating, pageIndex: state.viewPageIndex, sort: state.viewSort, pageSize: state.viewPageSize };
+  }
   renderPlaylist();
   persistLocalPlaylist();
 });
@@ -2558,16 +2592,30 @@ function buildViewOrder() {
   const indices = state.tracks.map((_, i) => i);
   const minR = Math.max(0, Math.min(5, Number(state.viewMinRating) || 0));
   const filtered = indices.filter(i => (Number(state.tracks[i].rating) || 0) >= minR);
-  if (state.viewSort === 'rating-desc' || state.viewSort === 'rating-asc') {
+  const sort = state.viewSort || 'none';
+  if (sort === 'rating-desc' || sort === 'rating-asc') {
     filtered.sort((a, b) => {
       const ra = Number(state.tracks[a].rating) || 0;
       const rb = Number(state.tracks[b].rating) || 0;
-      const primary = state.viewSort === 'rating-desc' ? (rb - ra) : (ra - rb);
+      const primary = sort === 'rating-desc' ? (rb - ra) : (ra - rb);
       if (primary !== 0) return primary;
-      const na = (state.tracks[a].name || '').toLowerCase();
-      const nb = (state.tracks[b].name || '').toLowerCase();
-      if (na < nb) return -1;
-      if (na > nb) return 1;
+      const na = getCleanTrackName(state.tracks[a]).toLowerCase();
+      const nb = getCleanTrackName(state.tracks[b]).toLowerCase();
+      const byName = na.localeCompare(nb, undefined, { numeric: true, sensitivity: 'base' });
+      if (byName !== 0) return byName;
+      return a - b;
+    });
+  } else if (sort === 'name-asc' || sort === 'name-desc') {
+    filtered.sort((a, b) => {
+      const na = getCleanTrackName(state.tracks[a]).toLowerCase();
+      const nb = getCleanTrackName(state.tracks[b]).toLowerCase();
+      const cmp = na.localeCompare(nb, undefined, { numeric: true, sensitivity: 'base' });
+      const primary = sort === 'name-asc' ? cmp : -cmp;
+      if (primary !== 0) return primary;
+      // A igualdad de nombre, mayor valoración primero
+      const ra = Number(state.tracks[a].rating) || 0;
+      const rb = Number(state.tracks[b].rating) || 0;
+      if (rb !== ra) return rb - ra;
       return a - b;
     });
   }
@@ -2950,6 +2998,19 @@ function persistLocalPlaylist() {
   } catch (error) {
     console.warn('No se pudo guardar localmente la lista', error);
   }
+  // Persistir preferencias de vista por lista en su propia clave
+  try {
+    const activeId = state.activePlaylistId;
+    if (activeId) {
+      viewPerList[activeId] = {
+        pageSize: state.viewPageSize,
+        pageIndex: state.viewPageIndex,
+        sort: state.viewSort || 'none',
+        minRating: state.viewMinRating || 0,
+      };
+    }
+    localStorage.setItem(STORAGE_KEYS.viewPerList, JSON.stringify(viewPerList));
+  } catch {}
 }
 
 function loadLocalPlaylist() {
@@ -3071,8 +3132,19 @@ function loadLocalPlaylist() {
         }
       }
     } catch {}
+    try {
+      const vRaw = localStorage.getItem(STORAGE_KEYS.viewPerList);
+      if (vRaw) {
+        const obj = JSON.parse(vRaw);
+        if (obj && typeof obj === 'object') {
+          viewPerList = obj;
+        }
+      }
+    } catch {}
     // Normaliza y guarda inmediatamente la forma consolidada
     persistDropboxSidecarState();
+    // Aplicar preferencias por lista si existen para la activa
+    try { loadActiveViewPrefs(); } catch {}
   } catch (error) {
     console.warn('No se pudo leer la lista local', error);
     ensurePlaylistsInitialized();

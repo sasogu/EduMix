@@ -63,6 +63,7 @@ Puedes usarla totalmente en local (sin nube) o activar la sincronización para m
   - Reproducción: estrellas grandes bajo la portada para valorar al vuelo.
 
 - Orden y filtro
+  - Ordenar por nombre: A→Z o Z→A.
   - Ordenar por valoración: ⭐ alta→baja o baja→alta.
   - Filtro “mínimo de estrellas”: muestra solo ≥ N.
   - Paginación: controla el tamaño de página y navega con los botones ◀︎ ▶︎.
