@@ -3675,11 +3675,27 @@ async function uploadOneTrackWithRetry(token, track) {
       } else {
         file = blob;
       }
+    } else if (track.url && track.url.startsWith('blob:')) {
+      // Fallback: intenta leer el blob en memoria si existe URL local
+      try {
+        const resp = await fetch(track.url);
+        if (resp.ok) {
+          const blob = await resp.blob();
+          if (typeof File === 'function') {
+            file = new File([blob], uploadName, { type: blob.type || 'audio/mpeg', lastModified: track.lastModified || Date.now() });
+          } else {
+            file = blob;
+          }
+        }
+      } catch {}
     }
   } else if (typeof file.name === 'string') {
     uploadName = file.name;
   }
   if (!file) {
+    // No hay fuente local para subir; marca error para no dejarlo "en cola" indefinidamente
+    track._sync = 'error';
+    showDropboxError(`No se encontró copia local de ${track.name || track.fileName}. Vuelve a importarla para subir.`);
     return;
   }
   const safeName = (uploadName || track.fileName || track.id).replace(/[^a-zA-Z0-9._-]+/g, '_');
