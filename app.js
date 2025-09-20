@@ -60,6 +60,7 @@ const searchResultsEl = document.getElementById('searchResults');
 const clearLocalCopiesBtn = document.getElementById('clearLocalCopies');
 const selectAllForSyncBtn = document.getElementById('selectAllForSync');
 const clearSelectedForSyncBtn = document.getElementById('clearSelectedForSync');
+const dropboxClearPendingBtn = document.getElementById('dropboxClearPending');
 
 // ========== Fetch con timeout y AbortController ==========
 // Conserva el fetch original
@@ -1760,6 +1761,56 @@ dropboxDisconnectBtn?.addEventListener('click', () => {
 
 // Opción "subir al reproducir" eliminada: no hay listener
 
+// Botón rápido en el aviso de pendientes (si existe)
+try {
+  const btn = document.getElementById('dropboxPendingSyncNow');
+  btn?.addEventListener('click', () => {
+    if (dropboxState.isSyncing) return;
+    performDropboxSync({ loadRemote: true }).catch(console.error);
+  });
+} catch {}
+
+// Limpiar pendientes ya inexistentes en Dropbox
+dropboxClearPendingBtn?.addEventListener('click', async () => {
+  if (dropboxState.isSyncing) return;
+  try {
+    const token = await ensureDropboxToken();
+    if (!token) { showDropboxError('Conéctate a Dropbox para limpiar pendientes.'); return; }
+    const arr = Array.from(pendingDeletions || []);
+    if (!arr.length) return;
+    const CHUNK = 50;
+    for (let i = 0; i < arr.length; i += CHUNK) {
+      const slice = arr.slice(i, i + CHUNK);
+      await Promise.all(slice.map(async (path) => {
+        try {
+          const resp = await fetch('https://api.dropboxapi.com/2/files/get_metadata', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+            body: JSON.stringify({ path, include_deleted: true }),
+          });
+          if (resp.ok) {
+            const meta = await resp.json();
+            const tag = meta['.tag'] || '';
+            if (tag === 'deleted') {
+              pendingDeletions.delete(String(path).toLowerCase());
+            }
+          } else {
+            const txt = await resp.text().catch(() => '');
+            if (/not_found/i.test(txt)) {
+              pendingDeletions.delete(String(path).toLowerCase());
+            }
+          }
+        } catch {}
+      }));
+      await sleep(150);
+    }
+    persistLocalPlaylist();
+    updateDropboxUI();
+  } catch (e) {
+    console.warn('clear pending error', e);
+  }
+});
+
 // Botón rápido en el aviso de pendientes
 pendingSyncNowBtn?.addEventListener('click', () => {
   if (dropboxState.isSyncing) return;
@@ -2996,6 +3047,11 @@ function updateDropboxUI() {
     const hasFailed = hasFailedUploads();
     dropboxRetryFailedBtn.hidden = !hasFailed;
     dropboxRetryFailedBtn.disabled = dropboxState.isSyncing || !hasFailed;
+  }
+  if (dropboxClearPendingBtn) {
+    const hasPend = (pendingDeletions && pendingDeletions.size > 0);
+    dropboxClearPendingBtn.hidden = !hasPend;
+    dropboxClearPendingBtn.disabled = dropboxState.isSyncing || !hasPend;
   }
 
   // Aviso de cambios pendientes en modo manual
