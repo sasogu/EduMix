@@ -145,6 +145,15 @@
           <div><strong>Local:</strong> <span id="localUsage">—</span></div>
           <div><strong>Dropbox (app):</strong> <span id="dropboxUsage">—</span></div>
         </div>
+        <div class="cloud-options">
+          <label>
+            <input type="checkbox" id="dropboxAutoSync" /> Sincronización automática
+          </label>
+        </div>
+        <div id="dropboxPendingNotice" class="cloud-notice" hidden>
+          <span id="dropboxPendingText">Hay cambios pendientes. Pulsa “Sincronizar ahora”.</span>
+          <button id="dropboxPendingSyncNow" class="ghost">Sincronizar ahora</button>
+        </div>
         
         <!-- Preferir fuente local: oculto por ahora (mantiene configuración por defecto) -->
       </div>
@@ -153,10 +162,10 @@
   </main>
 
   <footer>
-    <p>EduMix v1.0.5</p>
+    <p>EduMix v1.0.6</p>
   </footer>
 
-  <script type="module" src="app.js?v=1.0.5"></script>
+  <script type="module" src="app.js?v=1.0.6"></script>
   <div id="coverLightbox" class="lightbox" hidden>
     <img id="coverLightboxImg" alt="Carátula ampliada" />
   </div>

@@ -32,6 +32,11 @@ const dropboxDisconnectBtn = document.getElementById('dropboxDisconnect');
 const dropboxSyncSelectedBtn = document.getElementById('dropboxSyncSelected');
 const preferLocalSourceToggle = document.getElementById('preferLocalSource');
 const normalizationToggle = document.getElementById('normToggle');
+const autoSyncToggle = document.getElementById('dropboxAutoSync');
+const cloudOptionsEl = document.querySelector('.cloud-options');
+const pendingNoticeEl = document.getElementById('dropboxPendingNotice');
+const pendingNoticeTextEl = document.getElementById('dropboxPendingText');
+const pendingSyncNowBtn = document.getElementById('dropboxPendingSyncNow');
 // Declarado para evitar ReferenceError en usos con optional chaining
 const dropboxRetryFailedBtn = document.getElementById('dropboxRetryFailed');
 const cloudSyncCard = document.querySelector('.cloud-sync');
@@ -56,12 +61,57 @@ const clearLocalCopiesBtn = document.getElementById('clearLocalCopies');
 const selectAllForSyncBtn = document.getElementById('selectAllForSync');
 const clearSelectedForSyncBtn = document.getElementById('clearSelectedForSync');
 
+// ========== Fetch con timeout y AbortController ==========
+// Conserva el fetch original
+const ORIG_FETCH = (typeof window !== 'undefined' && window.fetch) ? window.fetch.bind(window) : fetch;
+
+function fetchWithTimeout(resource, options = {}, timeoutMs = 30000) {
+  const controller = new AbortController();
+  const { signal: userSignal, ...rest } = options || {};
+  let timeoutId = null;
+  try {
+    timeoutId = setTimeout(() => {
+      try { controller.abort(new DOMException('Timeout', 'AbortError')); } catch { controller.abort(); }
+    }, Math.max(1, Number(timeoutMs) || 30000));
+  } catch {}
+  if (userSignal) {
+    if (userSignal.aborted) {
+      try { controller.abort(userSignal.reason); } catch { controller.abort(); }
+    } else {
+      try { userSignal.addEventListener('abort', () => { try { controller.abort(userSignal.reason); } catch { controller.abort(); } }, { once: true }); } catch {}
+    }
+  }
+  return ORIG_FETCH(resource, { ...rest, signal: controller.signal }).finally(() => { try { clearTimeout(timeoutId); } catch {} });
+}
+
+// Envuelve window.fetch con timeouts heurísticos por endpoint
+try {
+  if (typeof window !== 'undefined' && window && typeof window.fetch === 'function') {
+    window.fetch = (resource, options = {}) => {
+      const url = (typeof resource === 'string') ? resource : (resource && resource.url) ? resource.url : '';
+      let timeout = 30000; // por defecto
+      try {
+        if (/content\.dropboxapi\.com\/2\/files\/(upload|upload_session)/.test(url)) {
+          timeout = 300000; // 5 min para subidas/chunks
+        } else if (/content\.dropboxapi\.com\/2\/files\/download/.test(url)) {
+          timeout = 120000; // 2 min para descargas
+        } else if (/api\.dropboxapi\.com\//.test(url)) {
+          timeout = 45000; // 45s para endpoints de API
+        }
+      } catch {}
+      return fetchWithTimeout(resource, options, timeout);
+    };
+  }
+} catch {}
+
 const STORAGE_KEYS = {
   playlist: 'edumix-playlist',
   dropboxAuth: 'edumix-dropbox-auth',
   dropboxSession: 'edumix-dropbox-session',
   theme: 'edumix-theme',
   timeMode: 'edumix-time-mode', // 'elapsed' | 'remaining'
+  dropboxPending: 'edumix-dropbox-pending-deletions',
+  dropboxPerListMeta: 'edumix-dropbox-perlist-meta',
 };
 
 const dropboxConfig = {
@@ -92,6 +142,7 @@ const state = {
   viewSort: 'none',
   viewMinRating: 0,
   normalizationEnabled: true,
+  autoSync: false,
 };
 
 let selectedForSync = new Set();
@@ -232,8 +283,6 @@ const pendingUploads = new Map();
 let pendingDeletions = new Set();
 
 let dropboxAuth = loadDropboxAuth();
-// Preferencia por defecto: sincronización manual (no automática)
-const DROPBOX_AUTO_SYNC = false;
 const dropboxState = {
   isSyncing: false,
   syncQueued: null,
@@ -1711,6 +1760,12 @@ dropboxDisconnectBtn?.addEventListener('click', () => {
 
 // Opción "subir al reproducir" eliminada: no hay listener
 
+// Botón rápido en el aviso de pendientes
+pendingSyncNowBtn?.addEventListener('click', () => {
+  if (dropboxState.isSyncing) return;
+  performDropboxSync({ loadRemote: true }).catch(console.error);
+});
+
 // Opción "descargar solo al reproducir" eliminada: sin listener
 
 preferLocalSourceToggle?.addEventListener('change', () => {
@@ -1768,6 +1823,12 @@ normalizationToggle?.addEventListener('change', () => {
   updateNormalizationLive();
   persistLocalPlaylist();
   // Se guarda en Dropbox junto al resto de ajustes en la próxima sync
+});
+
+autoSyncToggle?.addEventListener('change', () => {
+  state.autoSync = !!autoSyncToggle.checked;
+  persistLocalPlaylist();
+  // No disparamos sync; se respetará la preferencia a partir de ahora y se guardará en settings en la próxima sync
 });
 
 pagerNextBtn?.addEventListener('click', () => {
@@ -2697,6 +2758,7 @@ function persistLocalPlaylist() {
     preferLocalSource: state.preferLocalSource,
     playbackRate: state.playbackRate,
     normalizationEnabled: state.normalizationEnabled,
+    autoSync: state.autoSync,
     playlistRev: dropboxPlaylistMeta.rev || null,
     playlistServerModified: dropboxPlaylistMeta.serverModified || null,
     perListMeta: dropboxPerListMeta,
@@ -2708,6 +2770,8 @@ function persistLocalPlaylist() {
   };
   try {
     localStorage.setItem(STORAGE_KEYS.playlist, JSON.stringify(data));
+    // Guardar en sidecar también para resiliencia entre versiones
+    persistDropboxSidecarState();
   } catch (error) {
     console.warn('No se pudo guardar localmente la lista', error);
   }
@@ -2801,11 +2865,57 @@ function loadLocalPlaylist() {
     } else if (normalizationToggle) {
       normalizationToggle.checked = true;
     }
+    if (typeof data?.autoSync === 'boolean') {
+      state.autoSync = !!data.autoSync;
+      if (autoSyncToggle) autoSyncToggle.checked = state.autoSync;
+    } else if (autoSyncToggle) {
+      autoSyncToggle.checked = false;
+    }
     updateSpeedUI();
+
+    // Migración/merge desde sidecar: prioridad a sidecar si existe
+    try {
+      const sidecarPendingRaw = localStorage.getItem(STORAGE_KEYS.dropboxPending);
+      if (sidecarPendingRaw) {
+        const arr = JSON.parse(sidecarPendingRaw);
+        if (Array.isArray(arr)) {
+          const merged = new Set([
+            ...Array.from(pendingDeletions || []),
+            ...arr.map(p => String(p).toLowerCase()),
+          ]);
+          pendingDeletions = merged;
+        }
+      }
+    } catch {}
+    try {
+      const sidecarMetaRaw = localStorage.getItem(STORAGE_KEYS.dropboxPerListMeta);
+      if (sidecarMetaRaw) {
+        const meta = JSON.parse(sidecarMetaRaw);
+        if (meta && typeof meta === 'object') {
+          dropboxPerListMeta = { ...(dropboxPerListMeta || {}), ...meta };
+        }
+      }
+    } catch {}
+    // Normaliza y guarda inmediatamente la forma consolidada
+    persistDropboxSidecarState();
   } catch (error) {
     console.warn('No se pudo leer la lista local', error);
     ensurePlaylistsInitialized();
   }
+}
+
+function persistDropboxSidecarState() {
+  try {
+    if (pendingDeletions && typeof pendingDeletions.forEach === 'function') {
+      const arr = Array.from(pendingDeletions).map(p => String(p).toLowerCase());
+      localStorage.setItem(STORAGE_KEYS.dropboxPending, JSON.stringify(arr));
+    }
+  } catch {}
+  try {
+    if (dropboxPerListMeta && typeof dropboxPerListMeta === 'object') {
+      localStorage.setItem(STORAGE_KEYS.dropboxPerListMeta, JSON.stringify(dropboxPerListMeta));
+    }
+  } catch {}
 }
 
 function loadDropboxAuth() {
@@ -2851,6 +2961,8 @@ function updateDropboxUI() {
     }
     dropboxConnectBtn.hidden = false;
     cloudSyncCard.classList.remove('is-syncing', 'is-error');
+    if (cloudOptionsEl) cloudOptionsEl.hidden = true;
+    if (pendingNoticeEl) pendingNoticeEl.hidden = true;
     return;
   }
   if (dropboxState.error) {
@@ -2872,6 +2984,8 @@ function updateDropboxUI() {
   dropboxDisconnectBtn.hidden = false;
   dropboxSyncBtn.disabled = dropboxState.isSyncing;
   dropboxDisconnectBtn.disabled = dropboxState.isSyncing;
+  if (cloudOptionsEl) cloudOptionsEl.hidden = false;
+  if (autoSyncToggle) autoSyncToggle.checked = !!state.autoSync;
   if (dropboxSyncSelectedBtn) {
     dropboxSyncSelectedBtn.hidden = false;
     const validIds = new Set(state.tracks.map(t => t.id));
@@ -2883,6 +2997,38 @@ function updateDropboxUI() {
     dropboxRetryFailedBtn.hidden = !hasFailed;
     dropboxRetryFailedBtn.disabled = dropboxState.isSyncing || !hasFailed;
   }
+
+  // Aviso de cambios pendientes en modo manual
+  if (pendingNoticeEl) {
+    const pending = getPendingDropboxChanges();
+    if (!dropboxState.isSyncing && !state.autoSync && (pending.uploads > 0 || pending.deletes > 0 || pending.listsChanged > 0)) {
+      const parts = [];
+      if (pending.uploads > 0) parts.push(`${pending.uploads} subida${pending.uploads !== 1 ? 's' : ''}`);
+      if (pending.deletes > 0) parts.push(`${pending.deletes} eliminación${pending.deletes !== 1 ? 'es' : ''}`);
+      if (pending.listsChanged > 0) parts.push(`${pending.listsChanged} lista${pending.listsChanged !== 1 ? 's' : ''} modificada${pending.listsChanged !== 1 ? 's' : ''}`);
+      if (pendingNoticeTextEl) {
+        pendingNoticeTextEl.textContent = `Cambios pendientes: ${parts.join(', ')}.`;
+      } else {
+        pendingNoticeEl.textContent = `Cambios pendientes: ${parts.join(', ')}.`;
+      }
+      if (pendingSyncNowBtn) pendingSyncNowBtn.disabled = false;
+      pendingNoticeEl.hidden = false;
+    } else {
+      if (pendingSyncNowBtn) pendingSyncNowBtn.disabled = true;
+      pendingNoticeEl.hidden = true;
+    }
+  }
+}
+
+function getPendingDropboxChanges() {
+  const uploads = pendingUploads ? pendingUploads.size : 0;
+  const deletes = pendingDeletions ? pendingDeletions.size : 0;
+  const since = Number(dropboxState?.lastSync) || 0;
+  let listsChanged = 0;
+  try {
+    listsChanged = state.playlists.filter(pl => Number(pl.updatedAt || 0) > since).length;
+  } catch { listsChanged = 0; }
+  return { uploads, deletes, listsChanged };
 }
 
 function showDropboxError(message) {
@@ -3914,7 +4060,7 @@ function requestDropboxSync(options = {}) {
   if (!isDropboxConnected()) {
     return;
   }
-  if (!DROPBOX_AUTO_SYNC) {
+  if (!state.autoSync) {
     // Sin auto-sync: solo sincroniza cuando el usuario pulsa los botones explícitos
     return;
   }
@@ -4736,6 +4882,7 @@ async function saveDropboxSettings(token) {
     preferLocalSource: state.preferLocalSource,
     playbackRate: state.playbackRate,
     normalizationEnabled: state.normalizationEnabled,
+    autoSync: !!state.autoSync,
   };
   const body = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
   const response = await fetch('https://content.dropboxapi.com/2/files/upload', {
@@ -4782,5 +4929,6 @@ async function pullDropboxSettings(token) {
   if (typeof json.preferLocalSource === 'boolean') { state.preferLocalSource = json.preferLocalSource; if (preferLocalSourceToggle) preferLocalSourceToggle.checked = state.preferLocalSource; }
   if (Number.isFinite(json.playbackRate)) { state.playbackRate = Number(json.playbackRate) || 1; updateSpeedUI(); }
   if (typeof json.normalizationEnabled === 'boolean') { state.normalizationEnabled = json.normalizationEnabled; if (normalizationToggle) normalizationToggle.checked = state.normalizationEnabled; }
+  if (typeof json.autoSync === 'boolean') { state.autoSync = !!json.autoSync; if (autoSyncToggle) autoSyncToggle.checked = state.autoSync; }
   persistLocalPlaylist();
 }
