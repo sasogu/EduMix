@@ -4158,6 +4158,17 @@ async function processPendingDeletions(token) {
   if (!pendingDeletions.size) {
     return;
   }
+  // No intentar borrar JSON de listas que están activas (paths deseados actuales)
+  try {
+    const desiredSet = new Set((state.playlists || []).map(pl => String(getPlaylistPath(pl)).toLowerCase()));
+    Array.from(pendingDeletions).forEach(p => {
+      const lp = String(p).toLowerCase();
+      if (desiredSet.has(lp)) {
+        try { console.debug('[DELETE] omitir activo', lp); } catch {}
+        pendingDeletions.delete(lp);
+      }
+    });
+  } catch {}
   const deletions = Array.from(pendingDeletions);
   const CHUNK = 900; // margen bajo límite
   for (let start = 0; start < deletions.length; start += CHUNK) {
@@ -5042,6 +5053,8 @@ async function saveDropboxPlaylistsPerList(token) {
     const desiredPath = getPlaylistPath(pl);
     const meta = dropboxPerListMeta[pl.id] || { path: desiredPath, rev: null };
     const pathChanged = meta.path && meta.path !== desiredPath;
+    const lcDesired = String(desiredPath).toLowerCase();
+    const lcPrev = String(meta.path || '').toLowerCase();
     let attempt = 0;
     const maxRetries = 5;
     while (attempt <= maxRetries) {
@@ -5112,7 +5125,10 @@ async function saveDropboxPlaylistsPerList(token) {
         const metaJson = await response.json();
         dropboxPerListMeta[pl.id] = { path: desiredPath, rev: metaJson.rev || null, serverModified: metaJson.server_modified || null };
         if (pathChanged && meta.path) {
-          pendingDeletions.add(String(meta.path).toLowerCase());
+          // Evitar borrar si solo cambió el caso (Dropbox es case-insensitive)
+          if (lcDesired !== lcPrev) {
+            pendingDeletions.add(lcPrev);
+          }
         }
         break;
       } catch (err) {
