@@ -62,6 +62,7 @@ const dropboxTestConnBtn = document.getElementById('dropboxTestConn');
 const selectAllForSyncBtn = document.getElementById('selectAllForSync');
 const clearSelectedForSyncBtn = document.getElementById('clearSelectedForSync');
 const dropboxClearPendingBtn = document.getElementById('dropboxClearPending');
+const dropboxForceDeleteBtn = document.getElementById('dropboxForceDelete');
 
 // ========== Fetch con timeout y AbortController ==========
 // Conserva el fetch original
@@ -1811,6 +1812,18 @@ dropboxClearPendingBtn?.addEventListener('click', async () => {
     updateDropboxUI();
   } catch (e) {
     console.warn('clear pending error', e);
+  }
+});
+
+// Forzar borrado inmediato de pendientes (delete_v2 para cada ruta)
+dropboxForceDeleteBtn?.addEventListener('click', async () => {
+  if (dropboxState.isSyncing) return;
+  try {
+    const token = await ensureDropboxToken();
+    if (!token) { showDropboxError('Conéctate a Dropbox para borrar pendientes.'); return; }
+    await forceDeleteRemainder(token);
+  } catch (e) {
+    console.warn('force delete error', e);
   }
 });
 
