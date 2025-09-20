@@ -544,7 +544,12 @@ function renameActivePlaylist() {
   active.updatedAt = Date.now();
   renderPlaylistPicker();
   persistLocalPlaylist();
-  requestDropboxSync();
+  // Forzar rename inmediato en Dropbox (aunque autoSync esté desactivado)
+  if (isDropboxConnected()) {
+    performDropboxSync({ loadRemote: false }).catch(console.error);
+  } else {
+    requestDropboxSync();
+  }
 }
 
 function deleteActivePlaylist() {
@@ -2858,6 +2863,17 @@ function formatDuration(seconds) {
 // Normaliza el título mostrado: quita carpetas, extensión y reemplaza '_' por espacios
 function getCleanTrackName(track) {
   if (!track) return '';
+  // Si el usuario renombró la pista, respetar su nombre por encima de fileName/ID3
+  if (track.userRenamed && track.name) {
+    let s = String(track.name);
+    s = repairMojibake(s);
+    s = applySpanishHeuristics(s);
+    s = s.split(/[/\\]/).pop();
+    s = s.replace(/\.(mp3|m4a|aac|flac|wav|ogg|opus|oga|aiff|alac)$/i, '');
+    s = s.replace(/_/g, ' ');
+    s = s.replace(/\s+/g, ' ').trim();
+    return s;
+  }
   const raw = pickBestRawName(track);
   if (!raw) return '';
   let s = repairMojibake(raw);
@@ -5217,13 +5233,31 @@ async function saveDropboxPlaylistsPerList(token) {
     const pathChanged = meta.path && meta.path !== desiredPath;
     const lcDesired = String(desiredPath).toLowerCase();
     const lcPrev = String(meta.path || '').toLowerCase();
+    // Si solo cambió el nombre (ruta), intenta un rename/move en Dropbox primero para no dejar duplicados
+    if (pathChanged && meta.path) {
+      try {
+        const moveResp = await fetch('https://api.dropboxapi.com/2/files/move_v2', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ from_path: meta.path, to_path: desiredPath, autorename: false, allow_shared_folder: true, allow_ownership_transfer: false }),
+        });
+        if (moveResp.ok) {
+          const mv = await moveResp.json().catch(() => null);
+          const md = mv && (mv.metadata || mv);
+          const newRev = md?.rev || null;
+          const serverModified = md?.server_modified || null;
+          dropboxPerListMeta[pl.id] = { path: desiredPath, rev: newRev, serverModified };
+        }
+      } catch {}
+    }
     let attempt = 0;
     const maxRetries = 5;
     while (attempt <= maxRetries) {
       try {
         await awaitDropboxWriteWindow();
         // Evitar update con rev antigua si cambió el path
-        const modeArg = (pathChanged ? 'overwrite' : (meta.rev ? { '.tag': 'update', update: meta.rev } : 'overwrite'));
+        const current = dropboxPerListMeta[pl.id] || meta;
+        const modeArg = (current.rev ? { '.tag': 'update', update: current.rev } : 'overwrite');
         const response = await fetch('https://content.dropboxapi.com/2/files/upload', {
           method: 'POST',
           headers: {
@@ -5286,11 +5320,9 @@ async function saveDropboxPlaylistsPerList(token) {
         }
         const metaJson = await response.json();
         dropboxPerListMeta[pl.id] = { path: desiredPath, rev: metaJson.rev || null, serverModified: metaJson.server_modified || null };
-        if (pathChanged && meta.path) {
-          // Evitar borrar si solo cambió el caso (Dropbox es case-insensitive)
-          if (lcDesired !== lcPrev) {
-            pendingDeletions.add(lcPrev);
-          }
+        // Si no se pudo mover antes y el path antiguo persiste diferente (no sólo por mayúsculas/minúsculas), programar borrado
+        if (pathChanged && meta.path && (lcDesired !== lcPrev)) {
+          pendingDeletions.add(lcPrev);
         }
         break;
       } catch (err) {
