@@ -4886,6 +4886,8 @@ async function saveDropboxPlaylistsPerList(token) {
     while (attempt <= maxRetries) {
       try {
         await awaitDropboxWriteWindow();
+        // Evitar update con rev antigua si cambió el path
+        const modeArg = (pathChanged ? 'overwrite' : (meta.rev ? { '.tag': 'update', update: meta.rev } : 'overwrite'));
         const response = await fetch('https://content.dropboxapi.com/2/files/upload', {
           method: 'POST',
           headers: {
@@ -4893,7 +4895,7 @@ async function saveDropboxPlaylistsPerList(token) {
             'Content-Type': 'application/octet-stream',
             'Dropbox-API-Arg': JSON.stringify({
               path: desiredPath,
-              mode: meta.rev ? { '.tag': 'update', update: meta.rev } : 'overwrite',
+              mode: modeArg,
               autorename: false,
               mute: true,
             }),
@@ -4902,6 +4904,41 @@ async function saveDropboxPlaylistsPerList(token) {
         });
         if (!response.ok) {
           const text = await response.text();
+          if (response.status === 409) {
+            // Intento de resolución de conflicto: consulta metadata y reintenta
+            try {
+              const mresp = await fetch('https://api.dropboxapi.com/2/files/get_metadata', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                body: JSON.stringify({ path: desiredPath, include_deleted: false }),
+              });
+              if (mresp.ok) {
+                const md = await mresp.json();
+                if (md && md['.tag'] === 'file' && md.rev) {
+                  dropboxPerListMeta[pl.id] = { path: desiredPath, rev: md.rev, serverModified: md.server_modified || null };
+                  attempt += 1;
+                  await sleep(200 + Math.random() * 200);
+                  continue;
+                }
+              } else {
+                const txt = await mresp.text().catch(() => '');
+                if (/not_found/i.test(txt)) {
+                  // Forzar overwrite sin rev en próximo intento
+                  dropboxPerListMeta[pl.id] = { path: desiredPath, rev: null, serverModified: null };
+                  attempt += 1;
+                  await sleep(200 + Math.random() * 200);
+                  continue;
+                }
+              }
+            } catch {}
+            // Como último recurso, limpiar rev local para forzar overwrite
+            if (dropboxPerListMeta[pl.id]?.rev) {
+              dropboxPerListMeta[pl.id].rev = null;
+              attempt += 1;
+              await sleep(200 + Math.random() * 200);
+              continue;
+            }
+          }
           const retrySeconds = parseDropboxRetryInfo(response.status, response.headers, text);
           if (retrySeconds && attempt < maxRetries) {
             dropboxWriteAvailableAt = Date.now() + retrySeconds * 1000;
@@ -4914,7 +4951,7 @@ async function saveDropboxPlaylistsPerList(token) {
         const metaJson = await response.json();
         dropboxPerListMeta[pl.id] = { path: desiredPath, rev: metaJson.rev || null, serverModified: metaJson.server_modified || null };
         if (pathChanged && meta.path) {
-          pendingDeletions.add(meta.path);
+          pendingDeletions.add(String(meta.path).toLowerCase());
         }
         break;
       } catch (err) {
