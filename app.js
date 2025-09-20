@@ -3404,21 +3404,25 @@ async function forceDeleteRemainder(token) {
       while (attempt <= maxRetries) {
         try {
           await awaitDropboxWriteWindow();
+          try { console.debug('[DELETE_V2] intentando', path, 'intento', attempt + 1); } catch {}
           const resp = await fetch('https://api.dropboxapi.com/2/files/delete_v2', {
             method: 'POST',
             headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
             body: JSON.stringify({ path }),
           });
           if (resp.ok) {
+            try { console.debug('[DELETE_V2] eliminado', path); } catch {}
             pendingDeletions.delete(String(path).toLowerCase());
             break;
           }
           const txt = await resp.text().catch(() => '');
+          try { console.warn('[DELETE_V2] fallo', path, 'status', resp.status, (txt||'').slice(0,200)); } catch {}
           if (resp.status === 401 && attempt < maxRetries) {
             const fresh = await ensureDropboxToken(true);
             if (fresh) { attempt += 1; continue; }
           }
           if (resp.status === 409 && /not_found|path_lookup/i.test(txt)) {
+            try { console.debug('[DELETE_V2] no encontrado, se limpia de pendientes', path); } catch {}
             pendingDeletions.delete(String(path).toLowerCase());
             break;
           }
@@ -3430,7 +3434,8 @@ async function forceDeleteRemainder(token) {
             continue;
           }
           break;
-        } catch {
+        } catch (e) {
+          try { console.warn('[DELETE_V2] error de red', path, 'intento', attempt + 1, e); } catch {}
           if (attempt >= maxRetries) break;
           await sleep(Math.min(16000, 1000 * Math.pow(2, attempt)) + Math.random() * 300);
           attempt += 1;
@@ -4188,6 +4193,8 @@ async function processPendingDeletions(token) {
           resJson.entries.forEach(e => {
             if (e['.tag'] === 'success' && e?.metadata?.path_lower) {
               pendingDeletions.delete(e.metadata.path_lower);
+            } else if (e['.tag'] === 'failure') {
+              try { console.warn('[DELETE_BATCH] fallo entrada', e); } catch {}
             }
           });
           break;
@@ -4212,6 +4219,7 @@ async function processPendingDeletions(token) {
               attempt += 1;
               continue;
             }
+            try { console.warn('[DELETE_BATCH/CHECK] no-OK', check.status, (text||'').slice(0,200)); } catch {}
             throw new Error('delete_batch/check failed');
           }
           const status = await check.json();
@@ -4226,6 +4234,8 @@ async function processPendingDeletions(token) {
                 // no existe; dejar de marcarlo
                 const p = e?.failure?.path_lookup?.['.tag'] === 'not_found' ? e?.failure?.path_lookup?.path : null;
                 if (p) pendingDeletions.delete(p);
+              } else if (e['.tag'] === 'failure') {
+                try { console.warn('[DELETE_BATCH] entrada failure', e); } catch {}
               }
             });
           }
