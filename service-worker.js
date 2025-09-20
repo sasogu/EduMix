@@ -1,10 +1,10 @@
-const CACHE_NAME = 'edumix-cache-v1.1.7';
+const CACHE_NAME = 'edumix-cache-v1.1.8';
+// Mantén el shell mínimo y coherente: evita duplicados y claves ambiguas
 const APP_SHELL = [
-  './',
   './index.html',
   './styles.css',
-  './app.js',
-  './app.js?v=1.1.7',
+  // Solo la versión actual usada por index.html
+  './app.js?v=1.1.8',
   './manifest.webmanifest',
   './icons/icon-192.png',
   './icons/icon-512.png',
@@ -16,6 +16,10 @@ self.addEventListener('install', event => {
       .then(cache => cache.addAll(APP_SHELL))
       // Activación inmediata de nuevas versiones del SW
       .then(() => self.skipWaiting())
+      .catch(() => {
+        // Si algo falla al precachear, no bloquees la instalación por completo
+        // (se podrá rellenar la caché bajo demanda en los fetch)
+      })
   );
 });
 
@@ -40,23 +44,32 @@ self.addEventListener('fetch', event => {
   const url = new URL(request.url);
 
   if (request.mode === 'navigate') {
-    event.respondWith(
-      fetch(request)
-        .then(response => {
-          const cloneA = response.clone();
-          const cloneB = response.clone();
+    event.respondWith((async () => {
+      try {
+        const response = await fetch(request);
+        // Guarda la última index.html válida para uso offline
+        if (response && response.ok) {
+          const copy = response.clone();
           caches.open(CACHE_NAME).then(cache => {
-            cache.put('./', cloneA);
-            cache.put('./index.html', cloneB);
+            cache.put('./index.html', copy).catch(() => {});
           });
-          return response;
-        })
-        .catch(() => caches.match('./index.html'))
-    );
+        }
+        return response;
+      } catch (e) {
+        const cached = await caches.match('./index.html');
+        if (cached) return cached;
+        // Último recurso: evita pantalla en blanco con una respuesta simple
+        return new Response('<!doctype html><title>Offline</title><h1>Sin conexión</h1><p>Vuelve a intentarlo.</p>', {
+          headers: { 'Content-Type': 'text/html; charset=UTF-8' },
+          status: 200,
+        });
+      }
+    })());
     return;
   }
 
   if (url.origin !== self.location.origin) {
+    // No controlar peticiones externas: deja que el navegador gestione
     return;
   }
 
@@ -69,7 +82,7 @@ self.addEventListener('fetch', event => {
         .then(response => {
           if (response && response.status === 200) {
             const copy = response.clone();
-            caches.open(CACHE_NAME).then(cache => cache.put(request, copy));
+            caches.open(CACHE_NAME).then(cache => cache.put(request, copy)).catch(() => {});
           }
           return response;
         })

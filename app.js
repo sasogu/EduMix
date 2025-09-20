@@ -1742,6 +1742,38 @@ if ('serviceWorker' in navigator) {
   });
 }
 
+// Captura básica de errores para evitar pantallas en blanco silenciosas
+try {
+  const showFatalError = (msg) => {
+    try {
+      const el = document.createElement('div');
+      el.style.position = 'fixed';
+      el.style.inset = '0 auto auto 0';
+      el.style.maxWidth = '100%';
+      el.style.zIndex = '99999';
+      el.style.background = 'rgba(232, 93, 117, 0.95)';
+      el.style.color = '#fff';
+      el.style.padding = '8px 12px';
+      el.style.fontFamily = 'system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif';
+      el.style.fontSize = '14px';
+      el.style.boxShadow = '0 6px 16px rgba(0,0,0,0.25)';
+      el.textContent = `Error en la app: ${msg}`;
+      document.body && document.body.appendChild(el);
+    } catch {}
+  };
+
+  window.addEventListener('error', (e) => {
+    // Evita inundar si es un recurso bloqueado de red; muestra solo errores JS
+    if (e && e.message) {
+      showFatalError(e.message);
+    }
+  });
+  window.addEventListener('unhandledrejection', (e) => {
+    const reason = e && (e.reason?.message || String(e.reason || ''));
+    if (reason) showFatalError(reason);
+  });
+} catch {}
+
 dropboxConnectBtn?.addEventListener('click', () => {
   beginDropboxAuth().catch(error => {
     console.error('Error iniciando Dropbox', error);
