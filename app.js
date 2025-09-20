@@ -1816,24 +1816,43 @@ dropboxClearPendingBtn?.addEventListener('click', async () => {
 
 // Probar conexión con Dropbox: distingue red bloqueada vs. OK
 dropboxTestConnBtn?.addEventListener('click', async () => {
+  const markOk = (msg) => {
+    if (dropboxStatusEl) dropboxStatusEl.textContent = msg || 'Conexión con Dropbox: OK';
+    cloudSyncCard?.classList.remove('is-error');
+  };
   try {
-    const res = await fetch('https://api.dropboxapi.com/2/check/user', {
+    // 1) check/app — no requiere token
+    const res = await fetch('https://api.dropboxapi.com/2/check/app', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: '{}',
     });
-    if (res.ok || res.status === 401) {
-      // 401 sin token también significa que hay salida a la red
-      if (dropboxStatusEl) dropboxStatusEl.textContent = 'Conexión con Dropbox: OK';
-      cloudSyncCard?.classList.remove('is-error');
-    } else {
+    if (res.ok) { markOk('Conexión con Dropbox: OK'); return; }
+    // 400/401/403/404 siguen indicando que la ruta de red es accesible
+    if (res.status >= 400 && res.status < 500) {
+      markOk(`Conexión con Dropbox: OK (HTTP ${res.status})`);
       const t = await res.text().catch(() => '');
-      showDropboxError('Dropbox responde pero con error.');
-      console.debug('check/user response', res.status, t);
+      console.debug('check/app response', res.status, t);
+      return;
     }
+    // Intento 2) check/user
+    const res2 = await fetch('https://api.dropboxapi.com/2/check/user', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    });
+    if (res2.ok || (res2.status >= 400 && res2.status < 500)) {
+      markOk(`Conexión con Dropbox: OK (HTTP ${res2.status})`);
+      const t = await res2.text().catch(() => '');
+      console.debug('check/user response', res2.status, t);
+      return;
+    }
+    const t = await res2.text().catch(() => '');
+    showDropboxError('Dropbox responde pero con error.');
+    console.debug('check/user response', res2.status, t);
   } catch (e) {
     showDropboxError('Bloqueo de red/extension hacia Dropbox.');
-    console.debug('check/user failed', e);
+    console.debug('Conectividad Dropbox fallida', e);
   }
 });
 
