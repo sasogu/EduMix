@@ -74,6 +74,12 @@
         <input type="checkbox" id="loopToggle" aria-label="Repetir automáticamente" />
         <span class="loop-indicator" aria-hidden="true"></span>
       </label>
+      <div class="eq-controls" role="group" aria-label="Ecualizador sencillo">
+        <span class="eq-label">Ecualizador</span>
+        <button id="eqBassBoost" type="button" class="ghost eq-button" aria-pressed="false">Graves+</button>
+        <button id="eqMidBoost" type="button" class="ghost eq-button" aria-pressed="false">Medios+</button>
+        <button id="eqTrebleBoost" type="button" class="ghost eq-button" aria-pressed="false">Agudos+</button>
+      </div>
     </section>
     <section class="card" id="playlistSection">
       <div class="section-heading">
@@ -175,10 +181,10 @@
   </main>
 
   <footer>
-    <p>EduMix v1.3.0</p>
+    <p>EduMix v1.3.1</p>
   </footer>
 
-  <script type="module" src="app.js?v=1.3.0"></script>
+  <script type="module" src="app.js?v=1.3.1"></script>
   <div id="coverLightbox" class="lightbox" hidden>
     <img id="coverLightboxImg" alt="Carátula ampliada" />
   </div>

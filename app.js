@@ -67,6 +67,9 @@ const selectAllForSyncBtn = document.getElementById('selectAllForSync');
 const clearSelectedForSyncBtn = document.getElementById('clearSelectedForSync');
 const dropboxClearPendingBtn = document.getElementById('dropboxClearPending');
 const dropboxForceDeleteBtn = document.getElementById('dropboxForceDelete');
+const eqBassBtn = document.getElementById('eqBassBoost');
+const eqMidBtn = document.getElementById('eqMidBoost');
+const eqTrebleBtn = document.getElementById('eqTrebleBoost');
 
 // ========== Fetch con timeout y AbortController ==========
 // Conserva el fetch original
@@ -157,6 +160,7 @@ const state = {
   viewMinRating: 0,
   normalizationEnabled: true,
   autoSync: false,
+  eqBoost: { bass: false, mid: false, treble: false },
 };
 
 let selectedForSync = new Set();
@@ -341,6 +345,8 @@ const WAVEFORM_MAX_SAMPLES_PER_BUCKET = 2048;
 const WAVEFORM_YIELD_EVERY_BUCKETS = 32;
 const MAX_WAVEFORM_CONCURRENCY = 1;
 const PERSIST_DEBOUNCE_MS = 250;
+const EQ_BAND_BOOST = { bass: 6, mid: 4, treble: 6 };
+const EQ_SMOOTHING = 0.12;
 const IDB_CONFIG = {
   name: 'edumix-media',
   version: 1,
@@ -1180,6 +1186,88 @@ function yieldToMainThread(timeout = 32) {
   });
 }
 
+function ensureEqState() {
+  if (!state.eqBoost || typeof state.eqBoost !== 'object') {
+    state.eqBoost = { bass: false, mid: false, treble: false };
+  } else {
+    state.eqBoost = {
+      bass: !!state.eqBoost.bass,
+      mid: !!state.eqBoost.mid,
+      treble: !!state.eqBoost.treble,
+    };
+  }
+  return state.eqBoost;
+}
+
+function normalizeEqBoost(value) {
+  if (!value || typeof value !== 'object') {
+    return { bass: false, mid: false, treble: false };
+  }
+  return {
+    bass: !!value.bass,
+    mid: !!value.mid,
+    treble: !!value.treble,
+  };
+}
+
+function applyEqSettings(player) {
+  if (!player || !player.eq) {
+    return;
+  }
+  const eqState = ensureEqState();
+  const ctx = audioContext;
+  const now = ctx?.currentTime || 0;
+  const bands = ['bass', 'mid', 'treble'];
+  bands.forEach(band => {
+    const filter = player.eq[band];
+    if (!filter) {
+      return;
+    }
+    const target = eqState[band] ? EQ_BAND_BOOST[band] || 0 : 0;
+    try {
+      if (ctx && typeof filter.gain.setTargetAtTime === 'function') {
+        filter.gain.setTargetAtTime(target, now, EQ_SMOOTHING);
+      } else if (typeof filter.gain.setValueAtTime === 'function' && ctx) {
+        filter.gain.setValueAtTime(target, now);
+      } else {
+        filter.gain.value = target;
+      }
+    } catch {
+      filter.gain.value = target;
+    }
+  });
+}
+
+function applyEqSettingsToAll() {
+  players.forEach(player => applyEqSettings(player));
+}
+
+function setEqButtonState(button, active) {
+  if (!button) {
+    return;
+  }
+  button.classList.toggle('is-active', !!active);
+  button.setAttribute('aria-pressed', active ? 'true' : 'false');
+}
+
+function updateEqUI() {
+  const eq = ensureEqState();
+  setEqButtonState(eqBassBtn, eq.bass);
+  setEqButtonState(eqMidBtn, eq.mid);
+  setEqButtonState(eqTrebleBtn, eq.treble);
+}
+
+function toggleEqBand(band) {
+  const eq = ensureEqState();
+  if (!(band in eq)) {
+    return;
+  }
+  eq[band] = !eq[band];
+  applyEqSettingsToAll();
+  updateEqUI();
+  persistLocalPlaylist();
+}
+
 async function ensureWaveform(track) {
   if (!track) {
     return null;
@@ -1329,6 +1417,27 @@ function createPlayer() {
   } catch {}
   const ctx = getAudioContext();
   const source = ctx.createMediaElementSource(audio);
+  const eq = {
+    bass: ctx.createBiquadFilter(),
+    mid: ctx.createBiquadFilter(),
+    treble: ctx.createBiquadFilter(),
+  };
+  try {
+    eq.bass.type = 'lowshelf';
+    eq.bass.frequency.value = 120;
+    eq.bass.gain.value = 0;
+  } catch {}
+  try {
+    eq.mid.type = 'peaking';
+    eq.mid.frequency.value = 1000;
+    eq.mid.Q.value = 1.1;
+    eq.mid.gain.value = 0;
+  } catch {}
+  try {
+    eq.treble.type = 'highshelf';
+    eq.treble.frequency.value = 6000;
+    eq.treble.gain.value = 0;
+  } catch {}
   const gain = ctx.createGain();
   gain.gain.value = 0;
   const compressor = ctx.createDynamicsCompressor();
@@ -1339,10 +1448,14 @@ function createPlayer() {
     compressor.attack.value = 0.01;
     compressor.release.value = 0.25;
   } catch {}
-  source.connect(gain);
+  source.connect(eq.bass);
+  eq.bass.connect(eq.mid);
+  eq.mid.connect(eq.treble);
+  eq.treble.connect(gain);
   gain.connect(compressor);
   compressor.connect(ctx.destination);
-  const player = { audio, gain, compressor, stopTimeout: null, advanceHandler: null, trackId: null };
+  const player = { audio, gain, compressor, eq, stopTimeout: null, advanceHandler: null, trackId: null };
+  applyEqSettings(player);
   audio.addEventListener('timeupdate', () => { handleWaveformProgress(player); updateTimeDisplay(player); });
   audio.addEventListener('loadedmetadata', () => handleWaveformMetadata(player));
   return player;
@@ -1756,6 +1869,11 @@ playlistEl?.addEventListener('dragend', () => {
   });
   dragIndex = null;
 });
+
+eqBassBtn?.addEventListener('click', () => toggleEqBand('bass'));
+eqMidBtn?.addEventListener('click', () => toggleEqBand('mid'));
+eqTrebleBtn?.addEventListener('click', () => toggleEqBand('treble'));
+updateEqUI();
 
 togglePlayBtn?.addEventListener('click', () => {
   if (!state.tracks.length) {
@@ -2720,6 +2838,7 @@ function updateControls() {
   syncLoopToggle();
   updateDropboxUI();
   updatePagerUI();
+  updateEqUI();
 }
 
 function buildViewOrder() {
@@ -3148,6 +3267,7 @@ function writePlaylistSnapshot() {
     playbackRate: state.playbackRate,
     normalizationEnabled: state.normalizationEnabled,
     autoSync: state.autoSync,
+    eqBoost: ensureEqState(),
     playlistRev: dropboxPlaylistMeta.rev || null,
     playlistServerModified: dropboxPlaylistMeta.serverModified || null,
     perListMeta: dropboxPerListMeta,
@@ -3288,6 +3408,13 @@ function loadLocalPlaylist() {
     } else if (autoSyncToggle) {
       autoSyncToggle.checked = false;
     }
+    if (data?.eqBoost) {
+      state.eqBoost = normalizeEqBoost(data.eqBoost);
+    } else {
+      ensureEqState();
+    }
+    updateEqUI();
+    applyEqSettingsToAll();
     updateSpeedUI();
 
     // Migración/merge desde sidecar: prioridad a sidecar si existe
@@ -5574,6 +5701,7 @@ async function saveDropboxSettings(token) {
     playbackRate: state.playbackRate,
     normalizationEnabled: state.normalizationEnabled,
     autoSync: !!state.autoSync,
+    eqBoost: ensureEqState(),
   };
   const body = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
   const response = await fetch('https://content.dropboxapi.com/2/files/upload', {
@@ -5621,5 +5749,10 @@ async function pullDropboxSettings(token) {
   if (Number.isFinite(json.playbackRate)) { state.playbackRate = Number(json.playbackRate) || 1; updateSpeedUI(); }
   if (typeof json.normalizationEnabled === 'boolean') { state.normalizationEnabled = json.normalizationEnabled; if (normalizationToggle) normalizationToggle.checked = state.normalizationEnabled; }
   if (typeof json.autoSync === 'boolean') { state.autoSync = !!json.autoSync; if (autoSyncToggle) autoSyncToggle.checked = state.autoSync; }
+  if (json.eqBoost) {
+    state.eqBoost = normalizeEqBoost(json.eqBoost);
+    updateEqUI();
+    applyEqSettingsToAll();
+  }
   persistLocalPlaylist();
 }

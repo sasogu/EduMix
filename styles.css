@@ -518,6 +518,37 @@ button.ghost:not(:disabled):hover {
   transform: translate(1.2rem, -50%);
 }
 
+.eq-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+  font-size: 0.9rem;
+}
+
+.eq-label {
+  font-weight: 600;
+  margin-right: 0.25rem;
+}
+
+.eq-button {
+  padding: 0.35rem 0.75rem;
+  font-size: 0.9rem;
+}
+
+.eq-button.is-active,
+.eq-button[aria-pressed="true"] {
+  background: var(--primary);
+  color: #fff;
+  border-color: transparent;
+}
+
+.eq-button.is-active:disabled,
+.eq-button[aria-pressed="true"]:disabled {
+  opacity: 0.75;
+}
+
 .loop-control.is-disabled {
   opacity: 0.55;
   cursor: not-allowed;
