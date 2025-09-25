@@ -5510,7 +5510,6 @@ async function pullDropboxPlaylistsPerList(token) {
         downloaded.push({ path, meta, doc });
       }
     }
-    if (!downloaded.length) return;
     const mapLocalTracks = new Map();
     const mapLocalPlaylistMeta = new Map();
     state.playlists.forEach(pl => {
@@ -5518,6 +5517,7 @@ async function pullDropboxPlaylistsPerList(token) {
       pl.tracks.forEach(t => mapLocalTracks.set(t.id, { track: t, playlistId: pl.id }));
     });
     const nextPlaylists = [];
+    const remotePaths = new Set(downloaded.map(({ path }) => String(path || '').toLowerCase()).filter(Boolean));
     downloaded.forEach(({ path, meta, doc }) => {
       const id = doc.id || generateId('pl');
       const playlist = { id, name: doc.name || 'Lista', updatedAt: doc.updatedAt ?? Date.now(), tracks: [] };
@@ -5565,13 +5565,50 @@ async function pullDropboxPlaylistsPerList(token) {
       nextPlaylists.push(playlist);
     });
     // Incorporar listas locales que no están en remoto
-    mapLocalPlaylistMeta.forEach((meta, pid) => {
-      if (!nextPlaylists.some(p => p.id === pid)) {
-        const pl = state.playlists.find(p => p.id === pid);
-        if (pl) nextPlaylists.push(pl);
+    const removedPlaylists = [];
+    mapLocalPlaylistMeta.forEach((metaInfo, pid) => {
+      if (nextPlaylists.some(p => p.id === pid)) {
+        return;
       }
+      const perMeta = dropboxPerListMeta && dropboxPerListMeta[pid];
+      const pathLower = perMeta && perMeta.path ? String(perMeta.path).toLowerCase() : null;
+      if (pathLower && !remotePaths.has(pathLower)) {
+        const pl = state.playlists.find(p => p.id === pid);
+        if (pl) {
+          removedPlaylists.push(pl);
+        }
+        if (dropboxPerListMeta && typeof dropboxPerListMeta === 'object') {
+          delete dropboxPerListMeta[pid];
+        }
+        try {
+          pendingDeletions.delete(pathLower);
+        } catch {}
+        return;
+      }
+      const pl = state.playlists.find(p => p.id === pid);
+      if (pl) nextPlaylists.push(pl);
     });
+    if (removedPlaylists.length) {
+      removedPlaylists.forEach(pl => {
+        (pl.tracks || []).forEach(track => {
+          if (!track.isRemote && track.url) {
+            try { URL.revokeObjectURL(track.url); } catch {}
+          }
+          if (track.coverUrl) {
+            try { URL.revokeObjectURL(track.coverUrl); } catch {}
+            track.coverUrl = null;
+          }
+          pendingUploads.delete(track.id);
+          waveformCache.delete(track.id);
+          deleteTrackFile(track.id).catch(console.error);
+        });
+      });
+    }
+    const removedIds = removedPlaylists.length ? new Set(removedPlaylists.map(pl => pl.id)) : null;
     state.playlists = nextPlaylists;
+    if (removedIds && removedIds.has(state.activePlaylistId)) {
+      state.activePlaylistId = state.playlists[0]?.id || null;
+    }
     ensurePlaylistsInitialized();
     persistLocalPlaylist();
     renderPlaylistPicker();
