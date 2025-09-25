@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">EduMix icono de vinilo</title>
+  <desc id="desc">Un disco de vinilo oscuro con una etiqueta azul.</desc>
+  <defs>
+    <radialGradient id="vinylBase" cx="50%" cy="50%" r="60%">
+      <stop offset="0%" stop-color="#0d1117" />
+      <stop offset="45%" stop-color="#11161d" />
+      <stop offset="100%" stop-color="#050608" />
+    </radialGradient>
+    <radialGradient id="labelGradient" cx="40%" cy="40%" r="70%">
+      <stop offset="0%" stop-color="#5aa9ff" />
+      <stop offset="100%" stop-color="#256dd7" />
+    </radialGradient>
+    <linearGradient id="highlight" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.35" />
+      <stop offset="50%" stop-color="#ffffff" stop-opacity="0" />
+    </linearGradient>
+  </defs>
+  <circle cx="256" cy="256" r="240" fill="url(#vinylBase)" />
+  <g stroke="#1b232e" stroke-width="4" fill="none" opacity="0.35">
+    <circle cx="256" cy="256" r="220" />
+    <circle cx="256" cy="256" r="200" />
+    <circle cx="256" cy="256" r="180" />
+    <circle cx="256" cy="256" r="160" />
+    <circle cx="256" cy="256" r="140" />
+    <circle cx="256" cy="256" r="120" />
+  </g>
+  <circle cx="256" cy="256" r="80" fill="url(#labelGradient)" />
+  <circle cx="256" cy="256" r="36" fill="#0d1117" />
+  <circle cx="256" cy="256" r="12" fill="#1f2933" />
+  <path d="M160 92c36-20 79-32 124-32 45 0 88 12 124 32l-44 76c-23-10-49-16-80-16-31 0-57 6-80 16z" fill="url(#highlight)" opacity="0.65" />
+</svg>

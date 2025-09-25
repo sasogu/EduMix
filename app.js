@@ -589,6 +589,14 @@ function deleteActivePlaylist() {
     deleteTrackFile(track.id).catch(console.error);
   });
 
+  const perListMeta = dropboxPerListMeta && dropboxPerListMeta[active.id];
+  if (perListMeta && perListMeta.path) {
+    pendingDeletions.add(String(perListMeta.path).toLowerCase());
+  }
+  if (dropboxPerListMeta && typeof dropboxPerListMeta === 'object') {
+    delete dropboxPerListMeta[active.id];
+  }
+
   // Eliminar la playlist del estado
   state.playlists = state.playlists.filter(p => p.id !== active.id);
   // Asegurar que exista al menos una lista
@@ -1567,6 +1575,10 @@ clearPlaylistBtn?.addEventListener('click', () => {
     deleteTrackFile(track.id).catch(console.error);
   });
   state.tracks.splice(0, state.tracks.length);
+  const active = getActivePlaylist();
+  if (active) {
+    active.updatedAt = Date.now();
+  }
   stopPlayback();
   invalidateShuffle();
   renderPlaylist();
@@ -2313,6 +2325,10 @@ function addTracks(files) {
     return;
   }
   state.tracks.push(...newTracks);
+  const activePlaylist = getActivePlaylist();
+  if (activePlaylist) {
+    activePlaylist.updatedAt = Date.now();
+  }
   newTracks.forEach(track => {
     ensureWaveform(track).catch(console.error);
     ensureCoverArt(track)
@@ -2364,6 +2380,10 @@ function removeTrack(index) {
     pendingDeletions.add(track.dropboxPath);
   }
   state.tracks.splice(index, 1);
+  const active = getActivePlaylist();
+  if (active) {
+    active.updatedAt = Date.now();
+  }
   invalidateShuffle();
   if (state.currentIndex === index) {
     if (state.tracks.length) {
