@@ -337,6 +337,10 @@ const CROSS_FADE_MIN = 0.2;
 const TOKEN_REFRESH_MARGIN = 90 * 1000;
 const TEMP_LINK_MARGIN = 60 * 1000;
 const WAVEFORM_SAMPLES = 800;
+const WAVEFORM_MAX_SAMPLES_PER_BUCKET = 2048;
+const WAVEFORM_YIELD_EVERY_BUCKETS = 32;
+const MAX_WAVEFORM_CONCURRENCY = 1;
+const PERSIST_DEBOUNCE_MS = 250;
 const IDB_CONFIG = {
   name: 'edumix-media',
   version: 1,
@@ -345,6 +349,10 @@ const IDB_CONFIG = {
 // Límite conservador por registro para evitar errores de tamaño en IndexedDB
 const IDB_MAX_VALUE_BYTES = 250 * 1024 * 1024; // ~250 MB
 let mediaDbPromise = null;
+
+let waveformJobsInFlight = 0;
+const waveformJobQueue = [];
+let persistTimer = null;
 
 function generateId(prefix) {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -1139,6 +1147,39 @@ function scheduleWaveformResize() {
   });
 }
 
+function acquireWaveformSlot() {
+  if (waveformJobsInFlight < MAX_WAVEFORM_CONCURRENCY) {
+    waveformJobsInFlight += 1;
+    return Promise.resolve();
+  }
+  return new Promise(resolve => {
+    waveformJobQueue.push(resolve);
+  });
+}
+
+function releaseWaveformSlot() {
+  if (waveformJobsInFlight > 0) {
+    waveformJobsInFlight -= 1;
+  }
+  if (waveformJobQueue.length) {
+    const next = waveformJobQueue.shift();
+    waveformJobsInFlight += 1;
+    next();
+  }
+}
+
+function yieldToMainThread(timeout = 32) {
+  return new Promise(resolve => {
+    try {
+      if (typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function') {
+        window.requestIdleCallback(() => resolve(), { timeout });
+        return;
+      }
+    } catch {}
+    setTimeout(resolve, Math.max(0, timeout));
+  });
+}
+
 async function ensureWaveform(track) {
   if (!track) {
     return null;
@@ -1151,49 +1192,55 @@ async function ensureWaveform(track) {
   }
   const promise = (async () => {
     let arrayBuffer = null;
-    const file = pendingUploads.get(track.id);
-    if (file) {
-      arrayBuffer = await file.arrayBuffer();
-    } else {
-      const stored = await loadTrackFile(track.id);
-      if (stored) {
-        arrayBuffer = stored.buffer;
-      } else if (track.isRemote || track.dropboxPath) {
-        const ready = await ensureTrackRemoteLink(track);
-        if (!ready) {
-          return null;
-        }
-        const response = await fetch(track.url, { mode: 'cors' });
-        if (!response.ok) {
-          throw new Error('No se pudo descargar la pista para la forma de onda');
-        }
-        arrayBuffer = await response.arrayBuffer();
-      } else if (track.url && track.url.startsWith('blob:')) {
-        try {
-          const response = await fetch(track.url);
-          if (response.ok) {
-            arrayBuffer = await response.arrayBuffer();
+    await acquireWaveformSlot();
+    try {
+      const file = pendingUploads.get(track.id);
+      if (file) {
+        arrayBuffer = await file.arrayBuffer();
+      } else {
+        const stored = await loadTrackFile(track.id);
+        if (stored) {
+          arrayBuffer = stored.buffer;
+        } else if (track.isRemote || track.dropboxPath) {
+          const ready = await ensureTrackRemoteLink(track);
+          if (!ready) {
+            return null;
           }
-        } catch (error) {
-          console.warn('No se pudo leer el blob local para la forma de onda', error);
+          const response = await fetch(track.url, { mode: 'cors' });
+          if (!response.ok) {
+            throw new Error('No se pudo descargar la pista para la forma de onda');
+          }
+          arrayBuffer = await response.arrayBuffer();
+        } else if (track.url && track.url.startsWith('blob:')) {
+          try {
+            const response = await fetch(track.url);
+            if (response.ok) {
+              arrayBuffer = await response.arrayBuffer();
+            }
+          } catch (error) {
+            console.warn('No se pudo leer el blob local para la forma de onda', error);
+          }
         }
       }
+      if (!arrayBuffer) {
+        return null;
+      }
+      const waveform = await computeWaveformFromArrayBuffer(arrayBuffer);
+      track.waveform = waveform;
+      // Calcular ganancia de normalización basada en picos
+      if (Array.isArray(waveform.peaks) && waveform.peaks.length) {
+        track.normalizationGain = computeNormalizationFromPeaks(waveform.peaks);
+      }
+      if ((!Number.isFinite(track.duration) || track.duration === null) && Number.isFinite(waveform.duration)) {
+        track.duration = waveform.duration;
+      }
+      persistLocalPlaylist();
+      requestDropboxSync();
+      return waveform;
+    } finally {
+      arrayBuffer = null;
+      releaseWaveformSlot();
     }
-    if (!arrayBuffer) {
-      return null;
-    }
-    const waveform = await computeWaveformFromArrayBuffer(arrayBuffer);
-    track.waveform = waveform;
-    // Calcular ganancia de normalización basada en picos
-    if (Array.isArray(waveform.peaks) && waveform.peaks.length) {
-      track.normalizationGain = computeNormalizationFromPeaks(waveform.peaks);
-    }
-    if ((!Number.isFinite(track.duration) || track.duration === null) && Number.isFinite(waveform.duration)) {
-      track.duration = waveform.duration;
-    }
-    persistLocalPlaylist();
-    requestDropboxSync();
-    return waveform;
   })()
     .catch(error => {
       console.error('Error generando forma de onda', error);
@@ -1209,14 +1256,14 @@ async function computeWaveformFromArrayBuffer(arrayBuffer) {
     const copy = arrayBuffer.slice(0);
     getAudioContext().decodeAudioData(copy, resolve, reject);
   });
-  const peaks = extractPeaks(buffer, WAVEFORM_SAMPLES);
+  const peaks = await extractPeaks(buffer, WAVEFORM_SAMPLES);
   return {
     peaks,
     duration: buffer.duration,
   };
 }
 
-function extractPeaks(buffer, buckets) {
+async function extractPeaks(buffer, buckets) {
   const channelCount = buffer.numberOfChannels;
   const channelData = [];
   for (let channel = 0; channel < channelCount; channel += 1) {
@@ -1231,12 +1278,23 @@ function extractPeaks(buffer, buckets) {
       break;
     }
     const end = Math.min(start + bucketSize, totalSamples);
+    const span = end - start;
+    const step = span > WAVEFORM_MAX_SAMPLES_PER_BUCKET ? Math.max(1, Math.floor(span / WAVEFORM_MAX_SAMPLES_PER_BUCKET)) : 1;
     let min = Infinity;
     let max = -Infinity;
     for (let channel = 0; channel < channelData.length; channel += 1) {
       const data = channelData[channel];
-      for (let i = start; i < end; i += 1) {
+      for (let i = start; i < end; i += step) {
         const sample = data[i];
+        if (sample < min) {
+          min = sample;
+        }
+        if (sample > max) {
+          max = sample;
+        }
+      }
+      if (step > 1 && span > 0) {
+        const sample = data[end - 1];
         if (sample < min) {
           min = sample;
         }
@@ -1249,6 +1307,9 @@ function extractPeaks(buffer, buckets) {
       peaks.push([0, 0]);
     } else {
       peaks.push([Number(min.toFixed(3)), Number(max.toFixed(3))]);
+    }
+    if ((bucketIndex + 1) % WAVEFORM_YIELD_EVERY_BUCKETS === 0) {
+      await yieldToMainThread();
     }
   }
   return peaks;
@@ -3050,7 +3111,28 @@ function accentLike(ch) {
   return map[ch] || 'í';
 }
 
-function persistLocalPlaylist() {
+function persistLocalPlaylist(options) {
+  if (options?.immediate) {
+    flushPersistLocalPlaylist();
+    return;
+  }
+  if (persistTimer) {
+    clearTimeout(persistTimer);
+  }
+  persistTimer = setTimeout(() => {
+    flushPersistLocalPlaylist();
+  }, PERSIST_DEBOUNCE_MS);
+}
+
+function flushPersistLocalPlaylist() {
+  if (persistTimer) {
+    clearTimeout(persistTimer);
+    persistTimer = null;
+  }
+  writePlaylistSnapshot();
+}
+
+function writePlaylistSnapshot() {
   const data = {
     playlists: state.playlists.map(playlist => ({
       id: playlist.id,
@@ -3095,6 +3177,21 @@ function persistLocalPlaylist() {
     }
     localStorage.setItem(STORAGE_KEYS.viewPerList, JSON.stringify(viewPerList));
   } catch {}
+}
+
+if (typeof window !== 'undefined') {
+  const flushPlaylist = () => persistLocalPlaylist({ immediate: true });
+  try { window.addEventListener('beforeunload', flushPlaylist); } catch {}
+  try { window.addEventListener('pagehide', flushPlaylist); } catch {}
+  if (typeof document !== 'undefined') {
+    try {
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'hidden') {
+          flushPlaylist();
+        }
+      });
+    } catch {}
+  }
 }
 
 function loadLocalPlaylist() {
