@@ -2997,6 +2997,7 @@ function updateNowPlaying() {
   }
   const displayTitle = getTrackDisplayTitle(track);
   nowPlayingEl.textContent = displayTitle || 'Pista';
+  appendFavoriteIndicator(nowPlayingEl, track);
   const tooltipParts = [];
   if (track.isFavorite) tooltipParts.push('Favorita');
   const artist = getTrackArtist(track);
@@ -3193,6 +3194,7 @@ function renderPlaylist() {
     if (fullTitle && fullTitle !== cleanTitle) {
       name.title = fullTitle;
     }
+    appendFavoriteIndicator(name, track);
     const meta = document.createElement('span');
     meta.className = 'track-meta';
     const metaParts = [];
@@ -3368,6 +3370,7 @@ function performGlobalSearch(query) {
     info.className = 'result-info';
     const title = document.createElement('strong');
     title.textContent = getTrackDisplayTitle(r.track) || 'Pista';
+    appendFavoriteIndicator(title, r.track);
     const meta = document.createElement('span');
     meta.className = 'result-meta';
     const metaBits = [];
@@ -3471,6 +3474,17 @@ function getTrackDisplayTitle(track) {
   }
   if (title) return title;
   return artist;
+}
+
+function appendFavoriteIndicator(element, track) {
+  if (!element || !track?.isFavorite) return;
+  const badge = document.createElement('span');
+  badge.className = 'favorite-indicator';
+  badge.textContent = '❤️';
+  badge.setAttribute('aria-label', 'Favorita');
+  badge.setAttribute('role', 'img');
+  element.append(' ');
+  element.append(badge);
 }
 
 function maybeInferArtistFromName(track) {

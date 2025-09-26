@@ -342,6 +342,21 @@ button.ghost:not(:disabled):hover {
   line-height: 1;
 }
 
+.favorite-indicator {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 0.35rem;
+  font-size: 1rem;
+}
+
+.track-title .favorite-indicator {
+  font-size: 1.1rem;
+}
+
+.now-playing-row .favorite-indicator {
+  font-size: 1.2rem;
+}
+
 /* Indicadores de estado de pista */
 .track-flags {
   display: inline-flex;
