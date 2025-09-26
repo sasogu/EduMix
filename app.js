@@ -440,6 +440,58 @@ function syncTracksFromActivePlaylist() {
   shuffleHistory = [];
 }
 
+function getAutoPlaylistByType(type) {
+  return state.playlists.find(playlist => playlist.autoType === type || (AUTO_PLAYLISTS[type] && playlist.id === AUTO_PLAYLISTS[type].id)) || null;
+}
+
+function ensureAutoPlaylists() {
+  try {
+    ensureFavoritesPlaylist();
+  } catch (error) {
+    console.warn('No se pudo asegurar la lista automática', error);
+  }
+}
+
+function ensureFavoritesPlaylist() {
+  const config = AUTO_PLAYLISTS.favorites;
+  if (!config) return;
+  let playlist = getAutoPlaylistByType('favorites');
+  if (!playlist) {
+    playlist = createPlaylistObject(config.name, [], { id: config.id, isAuto: true, autoType: 'favorites' });
+    state.playlists.push(playlist);
+  } else if (playlist.name !== config.name) {
+    playlist.name = config.name;
+  }
+  refreshFavoritesPlaylist({ force: true });
+}
+
+function refreshFavoritesPlaylist({ force = false } = {}) {
+  const playlist = getAutoPlaylistByType('favorites');
+  if (!playlist) return;
+  const favorites = [];
+  const seen = new Set();
+  const sourceTracks = getAllTracks({ includeAuto: false });
+  for (const track of sourceTracks) {
+    if (!track || !track.isFavorite) continue;
+    if (seen.has(track.id)) continue;
+    favorites.push(track);
+    seen.add(track.id);
+  }
+  if (!force) {
+    const currentIds = playlist.tracks.map(t => t.id);
+    if (currentIds.length === favorites.length && currentIds.every((id, idx) => id === favorites[idx]?.id)) {
+      return;
+    }
+  }
+  playlist.tracks.splice(0, playlist.tracks.length, ...favorites);
+  playlist.updatedAt = Date.now();
+  if (state.activePlaylistId === playlist.id) {
+    state.tracks = playlist.tracks;
+    schedulePlaylistRender();
+    updateControls();
+  }
+}
+
 function ensurePlaylistsInitialized() {
   if (!state.playlists.length) {
     state.playlists.push(createPlaylistObject('Lista 1'));
@@ -447,6 +499,7 @@ function ensurePlaylistsInitialized() {
   if (!state.activePlaylistId || !state.playlists.some(pl => pl.id === state.activePlaylistId)) {
     state.activePlaylistId = state.playlists[0].id;
   }
+  ensureAutoPlaylists();
   syncTracksFromActivePlaylist();
   renderPlaylistPicker();
 }
@@ -474,7 +527,10 @@ function renderPlaylistPicker() {
   state.playlists.forEach(playlist => {
     const option = document.createElement('option');
     option.value = playlist.id;
-    option.textContent = playlist.name;
+    option.textContent = playlist.isAuto ? `${playlist.name} (auto)` : playlist.name;
+    if (playlist.isAuto) {
+      option.dataset.auto = 'true';
+    }
     playlistPicker.append(option);
   });
   const targetValue = state.activePlaylistId || previous || (state.playlists[0] && state.playlists[0].id) || '';
@@ -594,6 +650,7 @@ function createPlaylist(name) {
   syncTracksFromActivePlaylist();
   state.currentIndex = -1;
   playlist.updatedAt = Date.now();
+  ensureAutoPlaylists();
   renderPlaylistPicker();
   renderPlaylist();
   updateControls();
@@ -605,6 +662,10 @@ function createPlaylist(name) {
 function renameActivePlaylist() {
   const active = getActivePlaylist();
   if (!active) return;
+  if (active.isAuto) {
+    window.alert('No puedes renombrar la lista automática de favoritas.');
+    return;
+  }
   const proposed = prompt('Nuevo nombre de la lista', active.name || '');
   if (proposed === null) return;
   const nextName = proposed.trim();
@@ -624,6 +685,10 @@ function renameActivePlaylist() {
 function deleteActivePlaylist() {
   const active = getActivePlaylist();
   if (!active) return;
+  if (active.isAuto) {
+    window.alert('La lista automática de favoritas no se puede eliminar.');
+    return;
+  }
   const confirmed = window.confirm(`¿Eliminar la lista "${active.name}"? Se eliminarán sus pistas de esta sesión.`);
   if (!confirmed) return;
   // Preparar eliminaciones de Dropbox y limpiar blobs/IDB
@@ -650,11 +715,13 @@ function deleteActivePlaylist() {
 
   // Eliminar la playlist del estado
   state.playlists = state.playlists.filter(p => p.id !== active.id);
-  // Asegurar que exista al menos una lista
-  if (!state.playlists.length) {
+  // Asegurar que exista al menos una lista no automática
+  if (!state.playlists.some(p => !p.isAuto)) {
     const fallback = createPlaylistObject('Lista 1', []);
-    state.playlists.push(fallback);
+    state.playlists.unshift(fallback);
   }
+  // Asegurar presencia de listas automáticas
+  ensureAutoPlaylists();
   // Activar la primera disponible
   state.activePlaylistId = state.playlists[0].id;
   stopPlayback({ skipPlaylistRender: true, skipControlsUpdate: true });
@@ -668,8 +735,11 @@ function deleteActivePlaylist() {
   requestDropboxSync();
 }
 
-function getAllTracks() {
-  return state.playlists.flatMap(playlist => playlist.tracks);
+function getAllTracks(options = {}) {
+  const { includeAuto = false } = options || {};
+  return state.playlists
+    .filter(playlist => includeAuto || !playlist.isAuto)
+    .flatMap(playlist => playlist.tracks);
 }
 
 function serializeTrack(track) {
@@ -680,6 +750,7 @@ function serializeTrack(track) {
     fileName: track.fileName,
     artist: track.artist ?? null,
     album: track.album ?? null,
+    isFavorite: !!track.isFavorite,
     duration: track.duration,
     updatedAt: track.updatedAt ?? null,
     rating: Number.isFinite(track.rating) ? track.rating : 0,
@@ -703,6 +774,7 @@ function serializeTrackLocal(track) {
     fileName: track.fileName,
     artist: track.artist ?? null,
     album: track.album ?? null,
+    isFavorite: !!track.isFavorite,
     duration: track.duration,
     updatedAt: track.updatedAt ?? null,
     rating: Number.isFinite(track.rating) ? track.rating : 0,
@@ -725,6 +797,7 @@ function deserializeTrack(entry) {
     fileName: entry.fileName ?? entry.name,
     artist: entry.artist || '',
     album: entry.album || '',
+    isFavorite: !!entry.isFavorite,
     url: null,
     duration: entry.duration ?? null,
     updatedAt: entry.updatedAt ?? null,
@@ -1609,6 +1682,11 @@ filePickerFiles?.addEventListener('change', event => {
 });
 
 clearPlaylistBtn?.addEventListener('click', () => {
+  const active = getActivePlaylist();
+  if (active?.isAuto) {
+    window.alert('La lista automática de favoritas se gestiona sola. Desmarca corazones para quitar canciones.');
+    return;
+  }
   const count = state.tracks.length;
   const noun = count === 1 ? 'pista' : 'pistas';
   const confirmed = window.confirm(`¿Limpiar la lista actual? Se eliminarán ${count} ${noun} de esta sesión.`);
@@ -1642,6 +1720,7 @@ clearPlaylistBtn?.addEventListener('click', () => {
   updateControls();
   persistLocalPlaylist();
   requestDropboxSync();
+  refreshFavoritesPlaylist({ force: true });
   scheduleStorageStatsUpdate();
 });
 
@@ -1886,6 +1965,9 @@ playlistEl?.addEventListener('click', event => {
       break;
     case 'rate':
       setTrackRating(index, Number(button.dataset.value) || 0);
+      break;
+    case 'favorite':
+      toggleTrackFavorite(index);
       break;
   }
 });
@@ -2333,11 +2415,22 @@ dropboxDeleteFailedBtn?.addEventListener('click', async () => {
   renderPlaylist();
   updateControls();
   persistLocalPlaylist();
+  refreshFavoritesPlaylist({ force: true });
   scheduleStorageStatsUpdate();
   updateDropboxUI();
 });
 
 function addTracks(files) {
+  const active = getActivePlaylist();
+  if (active?.isAuto) {
+    const fallback = state.playlists.find(pl => !pl.isAuto);
+    if (fallback) {
+      state.activePlaylistId = fallback.id;
+      syncTracksFromActivePlaylist();
+      renderPlaylistPicker();
+      updateControls();
+    }
+  }
   const audioFiles = files
     .filter(file => file.type.startsWith('audio/'))
     .sort((a, b) => {
@@ -2424,6 +2517,11 @@ function removeTrack(index) {
   if (!track) {
     return;
   }
+  const active = getActivePlaylist();
+  if (active?.isAuto) {
+    window.alert('Para quitar una pista de Favoritas, desmarca el corazón.');
+    return;
+  }
   const displayName = track.name || track.fileName || 'esta pista';
   const confirmed = window.confirm(`¿Eliminar "${displayName}" de la lista?`);
   if (!confirmed) {
@@ -2468,12 +2566,18 @@ function removeTrack(index) {
   updateControls();
   persistLocalPlaylist();
   requestDropboxSync();
+  refreshFavoritesPlaylist({ force: true });
   scheduleStorageStatsUpdate();
 }
 
 function renameTrack(index) {
   const track = state.tracks[index];
   if (!track) {
+    return;
+  }
+  const active = getActivePlaylist();
+  if (active?.isAuto) {
+    window.alert('No puedes renombrar pistas desde la lista automática. Ve a la lista original.');
     return;
   }
   const proposed = prompt('Nuevo nombre de la pista', track.name || track.fileName || '');
@@ -2504,6 +2608,20 @@ function setTrackRating(index, value) {
   track.rating = next;
   track.updatedAt = Date.now();
   schedulePlaylistRender();
+  persistLocalPlaylist();
+  requestDropboxSync();
+}
+
+function toggleTrackFavorite(index) {
+  const track = state.tracks[index];
+  if (!track) return;
+  track.isFavorite = !track.isFavorite;
+  track.updatedAt = Date.now();
+  refreshFavoritesPlaylist({ force: true });
+  schedulePlaylistRender();
+  if (state.tracks[state.currentIndex] === track) {
+    updateNowPlaying();
+  }
   persistLocalPlaylist();
   requestDropboxSync();
 }
@@ -2880,6 +2998,7 @@ function updateNowPlaying() {
   const displayTitle = getTrackDisplayTitle(track);
   nowPlayingEl.textContent = displayTitle || 'Pista';
   const tooltipParts = [];
+  if (track.isFavorite) tooltipParts.push('Favorita');
   const artist = getTrackArtist(track);
   if (artist) tooltipParts.push(artist);
   const cleanTitle = getCleanTrackName(track);
@@ -2914,6 +3033,9 @@ function syncLoopToggle() {
 }
 
 function updateControls() {
+  const activePlaylist = getActivePlaylist();
+  const activeIsAuto = !!activePlaylist?.isAuto;
+  const nonAutoCount = state.playlists.filter(pl => !pl.isAuto).length;
   togglePlayBtn.disabled = !state.tracks.length;
   togglePlayBtn.textContent = state.isPlaying ? 'Pausar' : 'Reproducir';
   if (state.shuffle) {
@@ -2923,12 +3045,12 @@ function updateControls() {
     prevTrackBtn.disabled = state.currentIndex <= 0;
     nextTrackBtn.disabled = state.currentIndex === -1 || state.currentIndex >= state.tracks.length - 1;
   }
-  clearPlaylistBtn.disabled = !state.tracks.length;
+  clearPlaylistBtn.disabled = !state.tracks.length || activeIsAuto;
   if (deletePlaylistBtn) {
-    deletePlaylistBtn.disabled = state.playlists.length <= 1;
+    deletePlaylistBtn.disabled = nonAutoCount <= 1 || activeIsAuto;
   }
   if (renamePlaylistBtn) {
-    renamePlaylistBtn.disabled = !state.playlists.length;
+    renamePlaylistBtn.disabled = !state.playlists.length || activeIsAuto;
   }
   if (shuffleToggleBtn) {
     shuffleToggleBtn.disabled = state.tracks.length <= 1;
@@ -3018,6 +3140,8 @@ function renderPlaylist() {
   playlistEl.innerHTML = '';
   const existingIds = new Set(state.tracks.map(t => t.id));
   selectedForSync = new Set(Array.from(selectedForSync).filter(id => existingIds.has(id)));
+  const activePlaylist = getActivePlaylist();
+  const activeIsAuto = !!activePlaylist?.isAuto;
   const order = buildViewOrder();
   const total = order.length;
   const size = Math.max(0, Number(state.viewPageSize) || 0);
@@ -3035,7 +3159,7 @@ function renderPlaylist() {
     const track = state.tracks[index];
     const item = document.createElement('li');
     item.className = 'track';
-    item.draggable = true;
+    item.draggable = !activeIsAuto;
     item.dataset.index = String(index);
     item.dataset.trackId = track.id;
     if (index === state.currentIndex) {
@@ -3048,7 +3172,11 @@ function renderPlaylist() {
     const handle = document.createElement('span');
     handle.className = 'track-handle';
     handle.textContent = '☰';
-    handle.title = 'Arrastra para reordenar';
+    handle.title = activeIsAuto ? 'La lista automática no se puede reordenar' : 'Arrastra para reordenar';
+    if (activeIsAuto) {
+      handle.setAttribute('aria-disabled', 'true');
+      handle.classList.add('is-disabled');
+    }
 
     const thumb = document.createElement('img');
     thumb.className = 'track-thumb';
@@ -3056,8 +3184,8 @@ function renderPlaylist() {
     thumb.src = track.coverUrl || getPlaceholderCover(48);
     thumb.hidden = false;
 
-  const title = document.createElement('div');
-  title.className = 'track-title';
+    const title = document.createElement('div');
+    title.className = 'track-title';
     const name = document.createElement('strong');
     const cleanTitle = getCleanTrackName(track) || track.fileName || 'Pista';
     name.textContent = cleanTitle;
@@ -3072,7 +3200,7 @@ function renderPlaylist() {
     if (artist) metaParts.push(artist);
     if (track.album) {
       const album = applySpanishHeuristics(repairMojibake(String(track.album))).trim();
-      if (album && album.toLowerCase() !== artist.toLowerCase()) {
+      if (album && (!artist || album.toLowerCase() !== artist.toLowerCase())) {
         metaParts.push(album);
       }
     }
@@ -3081,10 +3209,10 @@ function renderPlaylist() {
     const metaText = metaParts.join(' • ');
     meta.textContent = metaText;
     if (metaText) meta.title = metaText;
-      if (track._sync) {
-        const status = document.createElement('span');
-        status.className = 'badge';
-        const label = track._sync === 'queued' ? 'En cola…' : (track._sync === 'uploading' ? 'Subiendo…' : (track._sync === 'error' ? 'Error' : ''));
+    if (track._sync) {
+      const status = document.createElement('span');
+      status.className = 'badge';
+      const label = track._sync === 'queued' ? 'En cola…' : (track._sync === 'uploading' ? 'Subiendo…' : (track._sync === 'error' ? 'Error' : ''));
       if (label) {
         status.textContent = label;
         status.style.marginLeft = '0.5rem';
@@ -3126,15 +3254,27 @@ function renderPlaylist() {
 
     const actions = document.createElement('div');
     actions.className = 'track-actions';
-    // Botones de acción (Play, Renombrar, Eliminar) + Selección para sync
+    // Botones de acción (Play, Favorito, Renombrar, Eliminar) + Selección para sync
     const playButton = document.createElement('button');
     playButton.className = 'ghost icon-button';
+    playButton.type = 'button';
     const isPlayingTrack = index === state.currentIndex && state.isPlaying;
     playButton.textContent = isPlayingTrack ? '♪' : '▶';
     playButton.title = isPlayingTrack ? 'Reproduciendo' : 'Reproducir';
     playButton.setAttribute('aria-label', playButton.title);
     playButton.dataset.action = 'play';
     playButton.dataset.index = String(index);
+
+    const favoriteButton = document.createElement('button');
+    favoriteButton.className = 'ghost icon-button favorite-button';
+    favoriteButton.type = 'button';
+    favoriteButton.textContent = track.isFavorite ? '❤️' : '🤍';
+    favoriteButton.title = track.isFavorite ? 'Quitar de favoritos' : 'Añadir a favoritos';
+    favoriteButton.setAttribute('aria-label', favoriteButton.title);
+    favoriteButton.dataset.action = 'favorite';
+    favoriteButton.dataset.index = String(index);
+    favoriteButton.setAttribute('aria-pressed', track.isFavorite ? 'true' : 'false');
+    favoriteButton.classList.toggle('is-favorite', !!track.isFavorite);
 
     const renameButton = document.createElement('button');
     renameButton.className = 'ghost icon-button';
@@ -3143,6 +3283,10 @@ function renderPlaylist() {
     renameButton.setAttribute('aria-label', 'Renombrar pista');
     renameButton.dataset.action = 'rename';
     renameButton.dataset.index = String(index);
+    if (activeIsAuto) {
+      renameButton.disabled = true;
+      renameButton.title = 'No disponible en listas automáticas';
+    }
 
     const removeButton = document.createElement('button');
     removeButton.className = 'ghost icon-button';
@@ -3151,6 +3295,10 @@ function renderPlaylist() {
     removeButton.setAttribute('aria-label', 'Eliminar pista');
     removeButton.dataset.action = 'remove';
     removeButton.dataset.index = String(index);
+    if (activeIsAuto) {
+      removeButton.disabled = true;
+      removeButton.title = 'Gestiona favoritos desde sus listas originales';
+    }
 
     // Checkbox de selección junto a las acciones
     const selector = document.createElement('input');
@@ -3168,7 +3316,7 @@ function renderPlaylist() {
       updateDropboxUI();
     });
 
-    actions.append(playButton, renameButton, removeButton, selector);
+    actions.append(playButton, favoriteButton, renameButton, removeButton, selector);
     item.append(handle, thumb, title, actions);
     playlistEl.append(item);
 
@@ -3196,6 +3344,7 @@ function performGlobalSearch(query) {
   if (!q) return;
   const results = [];
   for (const playlist of state.playlists) {
+    if (playlist.isAuto) continue;
     const tracks = Array.isArray(playlist.tracks) ? playlist.tracks : [];
     for (let i = 0; i < tracks.length; i += 1) {
       const t = tracks[i];
@@ -3632,6 +3781,8 @@ function writePlaylistSnapshot() {
       name: playlist.name,
       updatedAt: playlist.updatedAt ?? null,
       tracks: playlist.tracks.map(serializeTrackLocal),
+      isAuto: !!playlist.isAuto,
+      autoType: playlist.autoType || null,
     })),
     activePlaylistId: state.activePlaylistId,
     fadeDuration: state.fadeDuration,
@@ -3731,14 +3882,26 @@ function loadLocalPlaylist() {
       preferLocalSourceToggle.checked = true;
     }
     if (Array.isArray(data?.playlists)) {
-      state.playlists = data.playlists.map(playlist => ({
-        id: playlist.id || generateId('pl'),
-        name: playlist.name || 'Lista',
-        updatedAt: playlist.updatedAt ?? null,
-        tracks: Array.isArray(playlist.tracks) ? playlist.tracks.map(deserializeTrack) : [],
-      }));
-      if (data.activePlaylistId && state.playlists.some(pl => pl.id === data.activePlaylistId)) {
-        state.activePlaylistId = data.activePlaylistId;
+      const idMap = new Map();
+      state.playlists = data.playlists.map(playlist => {
+        const originalId = playlist.id || generateId('pl');
+        const autoConfig = playlist.autoType ? AUTO_PLAYLISTS[playlist.autoType] : null;
+        const id = autoConfig?.id || originalId;
+        idMap.set(originalId, id);
+        return {
+          id,
+          name: autoConfig?.name || playlist.name || 'Lista',
+          updatedAt: playlist.updatedAt ?? null,
+          tracks: Array.isArray(playlist.tracks) ? playlist.tracks.map(deserializeTrack) : [],
+          isAuto: Boolean(playlist.isAuto || autoConfig),
+          autoType: playlist.autoType || (autoConfig ? 'favorites' : null),
+        };
+      });
+      if (data.activePlaylistId) {
+        const mapped = idMap.get(data.activePlaylistId) || data.activePlaylistId;
+        if (state.playlists.some(pl => pl.id === mapped)) {
+          state.activePlaylistId = mapped;
+        }
       }
     } else if (Array.isArray(data?.tracks)) {
       const fallback = createPlaylistObject('Lista 1', data.tracks.map(deserializeTrack));
@@ -4557,6 +4720,8 @@ async function saveDropboxPlaylist(token) {
       name: playlist.name,
       updatedAt: playlist.updatedAt ?? null,
       tracks: playlist.tracks.map(serializeTrack),
+      isAuto: !!playlist.isAuto,
+      autoType: playlist.autoType || null,
     })),
   };
   const body = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
@@ -4688,6 +4853,7 @@ async function pullDropboxPlaylist(token) {
       const localTrackMap = new Map();
       const localPlaylistMeta = new Map();
       state.playlists.forEach(playlist => {
+        if (playlist.isAuto) return;
         localPlaylistMeta.set(playlist.id, { name: playlist.name });
         playlist.tracks.forEach(track => {
           localTrackMap.set(track.id, { track, playlistId: playlist.id });
@@ -4747,6 +4913,13 @@ async function pullDropboxPlaylist(token) {
                 const localTs = Number(track.updatedAt || 0);
                 if (!localAlbum || remoteTs > localTs) {
                   track.album = remoteAlbum;
+                }
+              }
+              if (typeof entry.isFavorite === 'boolean') {
+                const remoteTs = Number(entry.updatedAt || 0);
+                const localTs = Number(track.updatedAt || 0);
+                if (remoteTs >= localTs || typeof track.isFavorite !== 'boolean') {
+                  track.isFavorite = entry.isFavorite;
                 }
               }
               if (Number.isFinite(entry.duration)) {
@@ -4964,7 +5137,9 @@ function applyRemoteDocumentToState(json) {
   if (Array.isArray(json?.playlists)) {
     const localTrackMap = new Map();
     const localPlaylistMeta = new Map();
+    const idMap = new Map();
     state.playlists.forEach(playlist => {
+      if (playlist.isAuto) return;
       localPlaylistMeta.set(playlist.id, { name: playlist.name, updatedAt: playlist.updatedAt });
       playlist.tracks.forEach(track => {
         localTrackMap.set(track.id, { track, playlistId: playlist.id });
@@ -4972,14 +5147,19 @@ function applyRemoteDocumentToState(json) {
     });
     const nextPlaylists = [];
     json.playlists.forEach(remotePlaylist => {
-      const playlistId = remotePlaylist.id || generateId('pl');
+      const sourceId = remotePlaylist.id || generateId('pl');
+      const autoConfig = remotePlaylist.autoType ? AUTO_PLAYLISTS[remotePlaylist.autoType] : null;
+      const playlistId = autoConfig?.id || sourceId;
       const playlist = {
-        id: playlistId,
-        name: remotePlaylist.name || 'Lista',
+        id: autoConfig?.id || playlistId,
+        name: autoConfig?.name || remotePlaylist.name || 'Lista',
         updatedAt: remotePlaylist.updatedAt ?? Date.now(),
         tracks: [],
+        isAuto: Boolean(remotePlaylist.isAuto || autoConfig),
+        autoType: remotePlaylist.autoType || (autoConfig ? 'favorites' : null),
       };
-      localPlaylistMeta.delete(playlistId);
+      localPlaylistMeta.delete(sourceId);
+      idMap.set(sourceId, playlist.id);
       if (Array.isArray(remotePlaylist.tracks)) {
         remotePlaylist.tracks.forEach(entry => {
           if (!entry?.id) return;
@@ -4987,6 +5167,17 @@ function applyRemoteDocumentToState(json) {
           let track = existingInfo ? existingInfo.track : deserializeTrack(entry);
           track.name = entry.name || track.name;
           track.fileName = entry.fileName ?? track.fileName ?? track.name;
+          const remoteArtist = typeof entry.artist === 'string' ? entry.artist.trim() : '';
+          if (remoteArtist) {
+            track.artist = remoteArtist;
+          }
+          const remoteAlbum = typeof entry.album === 'string' ? entry.album.trim() : '';
+          if (remoteAlbum) {
+            track.album = remoteAlbum;
+          }
+          if (typeof entry.isFavorite === 'boolean') {
+            track.isFavorite = entry.isFavorite;
+          }
           if (Number.isFinite(entry.duration)) track.duration = entry.duration;
           if (entry.dropboxPath) {
             track.dropboxPath = entry.dropboxPath;
@@ -5000,13 +5191,19 @@ function applyRemoteDocumentToState(json) {
           if (entry.waveform?.peaks?.length) track.waveform = entry.waveform;
           track.updatedAt = entry.updatedAt ?? track.updatedAt ?? null;
           playlist.tracks.push(track);
+          if (!getTrackArtist(track) && track.isFavorite) {
+            ensureTrackMetadata(track).catch(() => {});
+          }
         });
       }
       nextPlaylists.push(playlist);
     });
     state.playlists = nextPlaylists;
-    if (json.activePlaylistId && state.playlists.some(pl => pl.id === json.activePlaylistId)) {
-      state.activePlaylistId = json.activePlaylistId;
+    if (json.activePlaylistId) {
+      const mapped = idMap.get(json.activePlaylistId) || json.activePlaylistId;
+      if (state.playlists.some(pl => pl.id === mapped)) {
+        state.activePlaylistId = mapped;
+      }
     }
     if (Number.isFinite(json.fadeDuration)) {
       state.fadeDuration = json.fadeDuration;
@@ -5049,7 +5246,16 @@ function mergePlaylistDocuments(localDoc, remoteDoc) {
       result.playlists.push(L);
     } else if (L && R) {
       const chosenName = (L.updatedAt ?? 0) >= (R.updatedAt ?? 0) ? L.name : R.name;
-      const merged = { id, name: chosenName, updatedAt: Math.max(L.updatedAt ?? 0, R.updatedAt ?? 0), tracks: [] };
+      const mergedIsAuto = L.isAuto || R.isAuto;
+      const mergedAutoType = L.autoType || R.autoType || null;
+      const merged = {
+        id,
+        name: chosenName,
+        updatedAt: Math.max(L.updatedAt ?? 0, R.updatedAt ?? 0),
+        tracks: [],
+        isAuto: Boolean(mergedIsAuto),
+        autoType: mergedAutoType,
+      };
       const rTracks = new Map((R.tracks || []).map(t => [t.id, t]));
       const lTracks = new Map((L.tracks || []).map(t => [t.id, t]));
       const tids = new Set([...rTracks.keys(), ...lTracks.keys()]);
@@ -5954,14 +6160,24 @@ async function pullDropboxPlaylistsPerList(token) {
     const mapLocalTracks = new Map();
     const mapLocalPlaylistMeta = new Map();
     state.playlists.forEach(pl => {
+      if (pl.isAuto) return;
       mapLocalPlaylistMeta.set(pl.id, { name: pl.name, updatedAt: pl.updatedAt });
       pl.tracks.forEach(t => mapLocalTracks.set(t.id, { track: t, playlistId: pl.id }));
     });
     const nextPlaylists = [];
     const remotePaths = new Set(downloaded.map(({ path }) => String(path || '').toLowerCase()).filter(Boolean));
     downloaded.forEach(({ path, meta, doc }) => {
-      const id = doc.id || generateId('pl');
-      const playlist = { id, name: doc.name || 'Lista', updatedAt: doc.updatedAt ?? Date.now(), tracks: [] };
+      const sourceId = doc.id || generateId('pl');
+      const autoConfig = doc.autoType ? AUTO_PLAYLISTS[doc.autoType] : null;
+      const id = autoConfig?.id || sourceId;
+      const playlist = {
+        id,
+        name: autoConfig?.name || doc.name || 'Lista',
+        updatedAt: doc.updatedAt ?? Date.now(),
+        tracks: [],
+        isAuto: Boolean(doc.isAuto || autoConfig),
+        autoType: doc.autoType || (autoConfig ? 'favorites' : null),
+      };
       dropboxPerListMeta[id] = { path, rev: meta?.rev || null, serverModified: meta?.server_modified || null };
       if (Array.isArray(doc.tracks)) {
         doc.tracks.forEach(entry => {
@@ -5986,6 +6202,17 @@ async function pullDropboxPlaylistsPerList(token) {
             }
           }
           track.fileName = entry.fileName ?? track.fileName ?? track.name;
+          const remoteArtist2 = typeof entry.artist === 'string' ? entry.artist.trim() : '';
+          if (remoteArtist2) {
+            track.artist = remoteArtist2;
+          }
+          const remoteAlbum2 = typeof entry.album === 'string' ? entry.album.trim() : '';
+          if (remoteAlbum2) {
+            track.album = remoteAlbum2;
+          }
+          if (typeof entry.isFavorite === 'boolean') {
+            track.isFavorite = entry.isFavorite;
+          }
           if (Number.isFinite(entry.duration)) track.duration = entry.duration;
           if (Number.isFinite(entry.normalizationGain)) track.normalizationGain = entry.normalizationGain;
           if (Number.isFinite(entry.rating)) track.rating = entry.rating;
@@ -6001,6 +6228,9 @@ async function pullDropboxPlaylistsPerList(token) {
           if (entry.waveform?.peaks?.length) track.waveform = entry.waveform;
           track.updatedAt = entry.updatedAt ?? track.updatedAt ?? null;
           playlist.tracks.push(track);
+          if (!getTrackArtist(track) && track.isFavorite) {
+            ensureTrackMetadata(track).catch(() => {});
+          }
         });
       }
       nextPlaylists.push(playlist);
@@ -6066,6 +6296,9 @@ async function saveDropboxPlaylistsPerList(token) {
   // Evita repetir intentos de move_v2 en el mismo ciclo de vida
   const moveTried = new Set();
   for (const pl of state.playlists) {
+    if (pl.isAuto) {
+      continue;
+    }
     const payload = {
       version: 2,
       id: pl.id,

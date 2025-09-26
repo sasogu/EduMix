@@ -19,6 +19,7 @@ Puedes usarla totalmente en local (sin nube) o activar la sincronización para m
   - Renombrar y eliminar pistas.
   - Valoración por estrellas (1–5) por pista.
   - Completar automáticamente artista/álbum: primero lee etiquetas ID3 y, si faltan datos, consulta MusicBrainz con peticiones espaciadas.
+  - Marca favoritas con el corazón y consúltalas en la lista automática “Favoritas ⭐”.
 
 - Reproducción y mezcla
   - Fundido configurable entre pistas.

@@ -242,6 +242,11 @@ button.ghost:not(:disabled):hover {
   cursor: grab;
 }
 
+.track-handle.is-disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
 .track-title {
   display: flex;
   flex-direction: column;
@@ -325,6 +330,16 @@ button.ghost:not(:disabled):hover {
 .icon-button.is-active {
   background: rgba(74, 144, 226, 0.12);
   border-color: rgba(74, 144, 226, 0.45);
+}
+
+.favorite-button[aria-pressed="true"],
+.favorite-button.is-favorite {
+  color: #e53977;
+}
+
+.favorite-button {
+  font-size: 1.15rem;
+  line-height: 1;
 }
 
 /* Indicadores de estado de pista */
