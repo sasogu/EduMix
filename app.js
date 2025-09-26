@@ -359,6 +359,8 @@ let mediaDbPromise = null;
 let waveformJobsInFlight = 0;
 const waveformJobQueue = [];
 let persistTimer = null;
+let scheduledPlaylistRenderId = null;
+let scheduledPlaylistRenderIsRaf = false;
 
 function generateId(prefix) {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -516,7 +518,7 @@ function setActivePlaylist(id) {
   if (!target) {
     return;
   }
-  stopPlayback();
+  stopPlayback({ skipPlaylistRender: true, skipControlsUpdate: true });
   state.activePlaylistId = id;
   syncTracksFromActivePlaylist();
   // Cargar preferencias específicas de esta lista
@@ -538,7 +540,7 @@ function createPlaylist(name) {
   }
   const playlist = createPlaylistObject(trimmed, []);
   state.playlists.push(playlist);
-  stopPlayback();
+  stopPlayback({ skipPlaylistRender: true, skipControlsUpdate: true });
   state.activePlaylistId = playlist.id;
   syncTracksFromActivePlaylist();
   state.currentIndex = -1;
@@ -606,7 +608,7 @@ function deleteActivePlaylist() {
   }
   // Activar la primera disponible
   state.activePlaylistId = state.playlists[0].id;
-  stopPlayback();
+  stopPlayback({ skipPlaylistRender: true, skipControlsUpdate: true });
   syncTracksFromActivePlaylist();
   state.currentIndex = -1;
   renderPlaylistPicker();
@@ -1579,9 +1581,9 @@ clearPlaylistBtn?.addEventListener('click', () => {
   if (active) {
     active.updatedAt = Date.now();
   }
-  stopPlayback();
+  stopPlayback({ skipPlaylistRender: true, skipControlsUpdate: true });
   invalidateShuffle();
-  renderPlaylist();
+  schedulePlaylistRender();
   updateControls();
   persistLocalPlaylist();
   requestDropboxSync();
@@ -2183,7 +2185,7 @@ clearLocalCopiesBtn?.addEventListener('click', async () => {
   }
   waveformCache.clear();
   persistLocalPlaylist();
-  renderPlaylist();
+  schedulePlaylistRender();
   scheduleStorageStatsUpdate();
 });
 
@@ -2191,7 +2193,7 @@ selectAllForSyncBtn?.addEventListener('click', () => {
   const ids = (state.tracks || []).map(t => t.id);
   ids.forEach(id => selectedForSync.add(id));
   persistLocalPlaylist();
-  renderPlaylist();
+  schedulePlaylistRender();
   updateDropboxUI();
 });
 
@@ -2199,14 +2201,14 @@ clearSelectedForSyncBtn?.addEventListener('click', () => {
   const ids = (state.tracks || []).map(t => t.id);
   ids.forEach(id => selectedForSync.delete(id));
   persistLocalPlaylist();
-  renderPlaylist();
+  schedulePlaylistRender();
   updateDropboxUI();
 });
 
 pagerPrevBtn?.addEventListener('click', () => {
   if (state.viewPageSize <= 0) return;
   state.viewPageIndex = Math.max(0, (state.viewPageIndex || 0) - 1);
-  renderPlaylist();
+  schedulePlaylistRender();
   persistLocalPlaylist();
 });
 
@@ -2267,7 +2269,7 @@ dropboxDeleteFailedBtn?.addEventListener('click', async () => {
   // Ajustar selección y reproducción
   selectedForSync = new Set(Array.from(selectedForSync).filter(id => !failedIds.has(id)));
   if (state.currentIndex >= 0 && state.tracks[state.currentIndex] && failedIds.has(state.tracks[state.currentIndex].id)) {
-    stopPlayback();
+    stopPlayback({ skipPlaylistRender: true, skipControlsUpdate: true });
     state.currentIndex = -1;
     setWaveformTrack(null);
   }
@@ -2351,7 +2353,7 @@ function readDuration(track) {
     if (waveformState.trackId === track.id) {
       waveformState.duration = track.duration;
     }
-    renderPlaylist();
+    schedulePlaylistRender();
     persistLocalPlaylist();
   }, { once: true });
 }
@@ -2401,7 +2403,7 @@ function removeTrack(index) {
   if (!state.tracks.length) {
     setWaveformTrack(null);
   }
-  renderPlaylist();
+  schedulePlaylistRender();
   updateControls();
   persistLocalPlaylist();
   requestDropboxSync();
@@ -2440,7 +2442,7 @@ function setTrackRating(index, value) {
   if (track.rating === next) return;
   track.rating = next;
   track.updatedAt = Date.now();
-  renderPlaylist();
+  schedulePlaylistRender();
   persistLocalPlaylist();
   requestDropboxSync();
 }
@@ -2461,7 +2463,7 @@ function reorderTracks(from, to) {
   } else if (state.currentIndex < from && state.currentIndex >= to) {
     state.currentIndex += 1;
   }
-  renderPlaylist();
+  schedulePlaylistRender();
   updateControls();
   persistLocalPlaylist();
   requestDropboxSync();
@@ -2772,7 +2774,8 @@ async function playTrack(index, options = {}) {
   };
 }
 
-function stopPlayback() {
+function stopPlayback(options = {}) {
+  const { skipPlaylistRender = false, skipControlsUpdate = false } = options || {};
   if (players.length) {
     const now = audioContext ? getAudioContext().currentTime : 0;
     players.forEach(player => {
@@ -2791,8 +2794,14 @@ function stopPlayback() {
   state.isPlaying = false;
   updateNowPlaying();
   updateCoverArtDisplay(null);
-  renderPlaylist();
-  updateControls();
+  if (skipPlaylistRender) {
+    cancelScheduledPlaylistRender();
+  } else {
+    renderPlaylist();
+  }
+  if (!skipControlsUpdate) {
+    updateControls();
+  }
   setWaveformTrack(null);
   updateMediaSessionPlaybackState();
 }
@@ -2895,7 +2904,42 @@ function buildViewOrder() {
   return filtered;
 }
 
+function cancelScheduledPlaylistRender() {
+  if (scheduledPlaylistRenderId === null) {
+    return;
+  }
+  if (scheduledPlaylistRenderIsRaf && typeof window !== 'undefined' && typeof window.cancelAnimationFrame === 'function') {
+    window.cancelAnimationFrame(scheduledPlaylistRenderId);
+  } else {
+    clearTimeout(scheduledPlaylistRenderId);
+  }
+  scheduledPlaylistRenderId = null;
+  scheduledPlaylistRenderIsRaf = false;
+}
+
+function schedulePlaylistRender() {
+  if (scheduledPlaylistRenderId !== null) {
+    return;
+  }
+  const canUseRaf = typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function';
+  scheduledPlaylistRenderIsRaf = canUseRaf;
+  if (canUseRaf) {
+    scheduledPlaylistRenderId = window.requestAnimationFrame(() => {
+      scheduledPlaylistRenderId = null;
+      scheduledPlaylistRenderIsRaf = false;
+      renderPlaylist();
+    });
+  } else {
+    scheduledPlaylistRenderId = setTimeout(() => {
+      scheduledPlaylistRenderId = null;
+      scheduledPlaylistRenderIsRaf = false;
+      renderPlaylist();
+    }, 16);
+  }
+}
+
 function renderPlaylist() {
+  cancelScheduledPlaylistRender();
   if (!playlistEl) {
     return;
   }
@@ -4171,7 +4215,7 @@ async function uploadPendingTracks(token, list) {
       const track = candidates[i];
       if (!track) break;
       track._sync = 'uploading';
-      renderPlaylist();
+      schedulePlaylistRender();
       await uploadOneTrackWithRetry(token, track);
       if (track.dropboxPath) {
         dropboxState.progressDone += 1;
@@ -4180,7 +4224,7 @@ async function uploadPendingTracks(token, list) {
         track._sync = track._sync || null;
       }
       updateDropboxUI();
-      renderPlaylist();
+      schedulePlaylistRender();
     }
   };
   const workers = Array.from({ length: Math.min(CONCURRENCY, candidates.length) }, () => worker());
@@ -5033,7 +5077,7 @@ async function ensureCoverArt(track) {
       if (clean && clean !== track.name) {
         track.name = clean;
         track.updatedAt = Date.now();
-        renderPlaylist();
+        schedulePlaylistRender();
         updateNowPlaying();
         persistLocalPlaylist();
       }
