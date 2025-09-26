@@ -1710,9 +1710,9 @@ clearPlaylistBtn?.addEventListener('click', () => {
     deleteTrackFile(track.id).catch(console.error);
   });
   state.tracks.splice(0, state.tracks.length);
-  const active = getActivePlaylist();
-  if (active) {
-    active.updatedAt = Date.now();
+  const current = getActivePlaylist();
+  if (current) {
+    current.updatedAt = Date.now();
   }
   stopPlayback({ skipPlaylistRender: true, skipControlsUpdate: true });
   invalidateShuffle();
@@ -2541,9 +2541,9 @@ function removeTrack(index) {
     pendingDeletions.add(track.dropboxPath);
   }
   state.tracks.splice(index, 1);
-  const active = getActivePlaylist();
-  if (active) {
-    active.updatedAt = Date.now();
+  const playlist = getActivePlaylist();
+  if (playlist) {
+    playlist.updatedAt = Date.now();
   }
   invalidateShuffle();
   if (state.currentIndex === index) {
@@ -2592,8 +2592,8 @@ function renameTrack(index) {
   // Marca para no sobreescribir con títulos ID3 automáticamente
   track.userRenamed = true;
   track.updatedAt = Date.now();
-  const active = getActivePlaylist();
-  if (active) active.updatedAt = Date.now();
+  const playlist = getActivePlaylist();
+  if (playlist) playlist.updatedAt = Date.now();
   renderPlaylist();
   updateNowPlaying();
   persistLocalPlaylist();
