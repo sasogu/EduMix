@@ -5450,6 +5450,13 @@ async function initialize() {
       const tag = (e.target && e.target.tagName) ? String(e.target.tagName).toLowerCase() : '';
       const isTyping = tag === 'input' || tag === 'textarea' || tag === 'select' || (e.target && e.target.isContentEditable);
       if (!isTyping) {
+        if (e.key === ' ' || e.key === 'Spacebar') {
+          if (state.tracks.length && togglePlayBtn && !togglePlayBtn.disabled) {
+            e.preventDefault();
+            togglePlayBtn.click();
+          }
+          return;
+        }
         // reset a 1×
         if (e.key === 'r' || e.key === 'R') {
           e.preventDefault();
