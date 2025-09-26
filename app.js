@@ -71,6 +71,21 @@ const eqBassBtn = document.getElementById('eqBassBoost');
 const eqMidBtn = document.getElementById('eqMidBoost');
 const eqTrebleBtn = document.getElementById('eqTrebleBoost');
 
+const METADATA_LOOKUP_CONCURRENCY = 2;
+const METADATA_LOOKUP_COOLDOWN_MS = 1200;
+const MUSICBRAINZ_ENDPOINT = 'https://musicbrainz.org/ws/2/recording/';
+const metadataLookupCache = new Map();
+let metadataLookupInFlight = 0;
+const metadataLookupWaiters = [];
+let metadataLookupAvailableAt = 0;
+
+const AUTO_PLAYLISTS = {
+  favorites: {
+    id: 'auto-favorites',
+    name: 'Favoritas ⭐',
+  },
+};
+
 // ========== Fetch con timeout y AbortController ==========
 // Conserva el fetch original
 const ORIG_FETCH = (typeof window !== 'undefined' && window.fetch) ? window.fetch.bind(window) : fetch;
@@ -370,12 +385,46 @@ function generateId(prefix) {
   return `${prefix || 'id'}-${Date.now()}-${seed}`;
 }
 
-function createPlaylistObject(name, tracks = []) {
+function delay(ms) {
+  return new Promise(resolve => {
+    setTimeout(resolve, Math.max(0, Number(ms) || 0));
+  });
+}
+
+async function acquireMetadataSlot() {
+  if (metadataLookupInFlight >= METADATA_LOOKUP_CONCURRENCY) {
+    await new Promise(resolve => metadataLookupWaiters.push(resolve));
+  }
+  metadataLookupInFlight += 1;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    metadataLookupInFlight = Math.max(0, metadataLookupInFlight - 1);
+    const next = metadataLookupWaiters.shift();
+    if (next) {
+      try { next(); } catch {}
+    }
+  };
+}
+
+async function waitForMetadataCooldown() {
+  const now = Date.now();
+  if (now < metadataLookupAvailableAt) {
+    await delay(metadataLookupAvailableAt - now);
+  }
+  metadataLookupAvailableAt = Date.now() + METADATA_LOOKUP_COOLDOWN_MS;
+}
+
+function createPlaylistObject(name, tracks = [], options = {}) {
+  const { id = generateId('pl'), isAuto = false, autoType = null } = options || {};
   return {
-    id: generateId('pl'),
+    id,
     name: name || 'Lista',
     tracks,
     updatedAt: Date.now(),
+    isAuto: Boolean(isAuto),
+    autoType: autoType || null,
   };
 }
 
@@ -629,6 +678,8 @@ function serializeTrack(track) {
     name: track.name,
     userRenamed: !!track.userRenamed,
     fileName: track.fileName,
+    artist: track.artist ?? null,
+    album: track.album ?? null,
     duration: track.duration,
     updatedAt: track.updatedAt ?? null,
     rating: Number.isFinite(track.rating) ? track.rating : 0,
@@ -650,6 +701,8 @@ function serializeTrackLocal(track) {
     name: track.name,
     userRenamed: !!track.userRenamed,
     fileName: track.fileName,
+    artist: track.artist ?? null,
+    album: track.album ?? null,
     duration: track.duration,
     updatedAt: track.updatedAt ?? null,
     rating: Number.isFinite(track.rating) ? track.rating : 0,
@@ -670,6 +723,8 @@ function deserializeTrack(entry) {
     name: entry.name,
     userRenamed: !!entry.userRenamed,
     fileName: entry.fileName ?? entry.name,
+    artist: entry.artist || '',
+    album: entry.album || '',
     url: null,
     duration: entry.duration ?? null,
     updatedAt: entry.updatedAt ?? null,
@@ -2300,6 +2355,9 @@ function addTracks(files) {
         id: crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`,
         name: displayName,
         fileName: file.name,
+        artist: '',
+        album: '',
+        isFavorite: false,
         url,
         duration: null,
         size: file.size,
@@ -2335,7 +2393,10 @@ function addTracks(files) {
     ensureWaveform(track).catch(console.error);
     ensureCoverArt(track)
       .then(changed => { if (changed) updateTrackThumbnails(track); })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => {
+        ensureTrackMetadata(track).catch(() => {});
+      });
   });
   invalidateShuffle();
   renderPlaylist();
@@ -2816,7 +2877,18 @@ function updateNowPlaying() {
     updateMediaSessionMetadata(null);
     return;
   }
-  nowPlayingEl.textContent = getCleanTrackName(track);
+  const displayTitle = getTrackDisplayTitle(track);
+  nowPlayingEl.textContent = displayTitle || 'Pista';
+  const tooltipParts = [];
+  const artist = getTrackArtist(track);
+  if (artist) tooltipParts.push(artist);
+  const cleanTitle = getCleanTrackName(track);
+  if (cleanTitle && cleanTitle !== artist) tooltipParts.push(cleanTitle);
+  if (track.album) {
+    const album = applySpanishHeuristics(repairMojibake(String(track.album))).trim();
+    if (album) tooltipParts.push(`Álbum: ${album}`);
+  }
+  nowPlayingEl.title = tooltipParts.join(' • ');
   if (track.coverUrl) {
     updateCoverArtDisplay(track);
   }
@@ -2986,15 +3058,33 @@ function renderPlaylist() {
 
   const title = document.createElement('div');
   title.className = 'track-title';
-  const name = document.createElement('strong');
-  name.textContent = getCleanTrackName(track);
-  const meta = document.createElement('span');
-  // Meta: no mostrar duración ni carpeta; dejar vacío y usar solo para flags
-  meta.textContent = '';
-    if (track._sync) {
-      const status = document.createElement('span');
-      status.className = 'badge';
-      const label = track._sync === 'queued' ? 'En cola…' : (track._sync === 'uploading' ? 'Subiendo…' : (track._sync === 'error' ? 'Error' : ''));
+    const name = document.createElement('strong');
+    const cleanTitle = getCleanTrackName(track) || track.fileName || 'Pista';
+    name.textContent = cleanTitle;
+    const fullTitle = getTrackDisplayTitle(track);
+    if (fullTitle && fullTitle !== cleanTitle) {
+      name.title = fullTitle;
+    }
+    const meta = document.createElement('span');
+    meta.className = 'track-meta';
+    const metaParts = [];
+    const artist = getTrackArtist(track);
+    if (artist) metaParts.push(artist);
+    if (track.album) {
+      const album = applySpanishHeuristics(repairMojibake(String(track.album))).trim();
+      if (album && album.toLowerCase() !== artist.toLowerCase()) {
+        metaParts.push(album);
+      }
+    }
+    const metaDuration = Number.isFinite(track.duration) ? formatDuration(track.duration) : '';
+    if (metaDuration) metaParts.push(metaDuration);
+    const metaText = metaParts.join(' • ');
+    meta.textContent = metaText;
+    if (metaText) meta.title = metaText;
+      if (track._sync) {
+        const status = document.createElement('span');
+        status.className = 'badge';
+        const label = track._sync === 'queued' ? 'En cola…' : (track._sync === 'uploading' ? 'Subiendo…' : (track._sync === 'error' ? 'Error' : ''));
       if (label) {
         status.textContent = label;
         status.style.marginLeft = '0.5rem';
@@ -3014,8 +3104,8 @@ function renderPlaylist() {
     // Indicador de subida al reproducir eliminado
     // Indicador de descarga diferida eliminado
     if (flags.childElementCount > 0) {
-      flags.style.marginLeft = '0.5rem';
-      meta.append(' ', flags);
+      flags.style.marginLeft = metaParts.length ? '0.5rem' : '0';
+      meta.append(flags);
     }
     const rating = document.createElement('div');
     rating.className = 'track-rating';
@@ -3110,8 +3200,9 @@ function performGlobalSearch(query) {
     for (let i = 0; i < tracks.length; i += 1) {
       const t = tracks[i];
       const name = (t.name || t.fileName || '').toLowerCase();
-      if (!name) continue;
-      if (name.includes(q)) {
+      const artistName = getTrackArtist(t).toLowerCase();
+      if (!name && !artistName) continue;
+      if ((name && name.includes(q)) || (artistName && artistName.includes(q))) {
         results.push({ playlistId: playlist.id, playlistName: playlist.name, index: i, track: t });
         if (results.length >= 100) break;
       }
@@ -3127,12 +3218,17 @@ function performGlobalSearch(query) {
     const info = document.createElement('div');
     info.className = 'result-info';
     const title = document.createElement('strong');
-    title.textContent = getCleanTrackName(r.track) || 'Pista';
+    title.textContent = getTrackDisplayTitle(r.track) || 'Pista';
     const meta = document.createElement('span');
     meta.className = 'result-meta';
-    const posText = `#${r.index + 1}`;
-    const durationText = Number.isFinite(r.track.duration) ? ` • ${formatDuration(r.track.duration)}` : '';
-    meta.textContent = `${r.playlistName} • ${posText}${durationText}`;
+    const metaBits = [];
+    const artistName = getTrackArtist(r.track);
+    if (artistName) metaBits.push(artistName);
+    metaBits.push(`${r.playlistName} • #${r.index + 1}`);
+    if (Number.isFinite(r.track.duration)) {
+      metaBits.push(formatDuration(r.track.duration));
+    }
+    meta.textContent = metaBits.join(' • ');
     info.append(title, meta);
 
     const actions = document.createElement('div');
@@ -3194,6 +3290,220 @@ function getCleanTrackName(track) {
   // colapsar espacios múltiples y trim
   s = s.replace(/\s+/g, ' ').trim();
   return s;
+}
+
+function getTrackArtist(track) {
+  if (!track || !track.artist) return '';
+  try {
+    const fixed = applySpanishHeuristics(repairMojibake(String(track.artist)));
+    return fixed.trim();
+  } catch {
+    return String(track.artist).trim();
+  }
+}
+
+function trackTitleAlreadyPrefixed(title, artist) {
+  if (!title || !artist) return false;
+  const t = title.toLowerCase();
+  const a = artist.toLowerCase();
+  if (t === a) return true;
+  const separators = [' -', ' –', ' —', ' ·', ':', ' – ', ' — ', ' · '];
+  return separators.some(sep => t.startsWith(`${a}${sep}`));
+}
+
+function getTrackDisplayTitle(track) {
+  const title = getCleanTrackName(track);
+  const artist = getTrackArtist(track);
+  if (artist && title) {
+    if (trackTitleAlreadyPrefixed(title, artist)) {
+      return title;
+    }
+    return `${artist} — ${title}`;
+  }
+  if (title) return title;
+  return artist;
+}
+
+function maybeInferArtistFromName(track) {
+  if (!track || track.artist) return false;
+  const sources = [];
+  if (track.name) sources.push({ value: track.name, kind: 'name' });
+  if (track.fileName && track.fileName !== track.name) sources.push({ value: track.fileName, kind: 'file' });
+  if (track.dropboxPath) {
+    const base = String(track.dropboxPath).split('/').pop();
+    if (base) sources.push({ value: base, kind: 'dropbox' });
+  }
+  for (const source of sources) {
+    if (!source?.value) continue;
+    let raw = String(source.value);
+    raw = raw.replace(/^[\\/]+/, '');
+    raw = raw.split(/[/\\]/).pop();
+    raw = raw.replace(/\.(mp3|m4a|aac|flac|wav|ogg|opus|oga|aiff|alac)$/i, '');
+    raw = applySpanishHeuristics(repairMojibake(raw)).trim();
+    if (!raw) continue;
+    const match = raw.match(/^(.{2,80}?)\s*[-–—]\s*(.+)$/);
+    if (!match) continue;
+    const candidateArtist = match[1].trim();
+    const candidateTitle = match[2].trim();
+    if (!candidateArtist || !candidateTitle) {
+      continue;
+    }
+    if (/^\d{1,3}$/.test(candidateArtist)) {
+      continue;
+    }
+    track.artist = candidateArtist;
+    if (!track.userRenamed && source.kind === 'name' && candidateTitle.length) {
+      track.name = candidateTitle;
+    }
+    return true;
+  }
+  return false;
+}
+
+function onTrackMetadataEnhanced(track, { refreshNowPlaying = true } = {}) {
+  if (!track) return;
+  track.updatedAt = Date.now();
+  schedulePlaylistRender();
+  if (refreshNowPlaying && state.tracks[state.currentIndex] === track) {
+    updateNowPlaying();
+  }
+  persistLocalPlaylist();
+}
+
+function escapeMusicBrainzQuery(str) {
+  return String(str).replace(/["\\]/g, '\\$&');
+}
+
+async function queryMusicBrainz(title, artistHint, durationSeconds) {
+  try {
+    if (!title) return null;
+    const terms = [`recording:"${escapeMusicBrainzQuery(title)}"`];
+    if (artistHint) {
+      terms.push(`artist:"${escapeMusicBrainzQuery(artistHint)}"`);
+    }
+    const params = new URLSearchParams({
+      query: terms.join(' AND '),
+      fmt: 'json',
+      limit: '1',
+    });
+    const releaseSlot = await acquireMetadataSlot();
+    try {
+      await waitForMetadataCooldown();
+      const response = await fetch(`${MUSICBRAINZ_ENDPOINT}?${params.toString()}`, {
+        headers: {
+          'User-Agent': 'EduMix/1.3.5 (+https://github.com/sasogu/EduMix)',
+        },
+      });
+      if (!response.ok) {
+        return null;
+      }
+      const data = await response.json();
+      if (!data || !Array.isArray(data.recordings) || !data.recordings.length) {
+        return null;
+      }
+      const recording = data.recordings[0];
+      if (typeof recording?.score === 'number' && recording.score < 60) {
+        return null;
+      }
+      const artistCredit = Array.isArray(recording['artist-credit']) ? recording['artist-credit'] : [];
+      const artistName = artistCredit
+        .map(entry => entry?.name || entry?.artist?.name || '')
+        .filter(Boolean)
+        .join(' & ');
+      const releaseTitle = Array.isArray(recording.releases) && recording.releases.length
+        ? (recording.releases[0]?.title || '')
+        : '';
+      return {
+        artist: artistName || '',
+        album: releaseTitle || '',
+        title: recording.title || '',
+        duration: Number.isFinite(recording.length) ? recording.length : null,
+      };
+    } finally {
+      try { releaseSlot(); } catch {}
+    }
+  } catch (error) {
+    try { console.warn('MusicBrainz lookup failed', error); } catch {}
+    return null;
+  }
+}
+
+async function ensureTrackMetadata(track) {
+  if (!track || track.artist) return false;
+  if (track._metadataLookupPromise) {
+    try { return await track._metadataLookupPromise; } catch { return false; }
+  }
+
+  const heuristicsApplied = maybeInferArtistFromName(track);
+  if (heuristicsApplied) {
+    onTrackMetadataEnhanced(track);
+    return true;
+  }
+
+  const title = getCleanTrackName(track);
+  if (!title) {
+    return false;
+  }
+  const cacheKey = `${title.toLowerCase()}|${Math.round(Number(track.duration) || 0)}`;
+  const cached = metadataLookupCache.get(cacheKey);
+  if (cached && typeof cached.then !== 'function') {
+    return Boolean(cached);
+  }
+
+  const lookupPromise = (async () => {
+    if (cached && typeof cached.then === 'function') {
+      return cached;
+    }
+    const pending = queryMusicBrainz(title, '', track.duration);
+    metadataLookupCache.set(cacheKey, pending);
+    const result = await pending;
+    metadataLookupCache.set(cacheKey, result ?? null);
+    return result;
+  })()
+    .then(result => {
+      if (!result) {
+        return false;
+      }
+      let changed = false;
+      if (result.artist && !track.artist) {
+        const artistName = applySpanishHeuristics(repairMojibake(result.artist)).trim();
+        if (artistName && artistName.length >= 2) {
+          track.artist = artistName;
+          changed = true;
+        }
+      }
+      if (result.album && !track.album) {
+        const albumName = applySpanishHeuristics(repairMojibake(result.album)).trim();
+        if (albumName) {
+          track.album = albumName;
+          changed = true;
+        }
+      }
+      if (!track.userRenamed && result.title) {
+        const cleanResultTitle = applySpanishHeuristics(repairMojibake(result.title)).trim();
+        if (cleanResultTitle && cleanResultTitle.length > 1) {
+          const currentName = getCleanTrackName(track);
+          if (!currentName || currentName.length <= 1 || currentName === track.fileName) {
+            track.name = cleanResultTitle;
+            changed = true;
+          }
+        }
+      }
+      if (changed) {
+        onTrackMetadataEnhanced(track);
+      }
+      return changed;
+    })
+    .catch(error => {
+      try { console.warn('Metadata enrichment failed', error); } catch {}
+      return false;
+    })
+    .finally(() => {
+      track._metadataLookupPromise = null;
+    });
+
+  track._metadataLookupPromise = lookupPromise;
+  return lookupPromise;
 }
 
 function isNameMojibake(str) {
@@ -4421,6 +4731,24 @@ async function pullDropboxPlaylist(token) {
                 }
               }
               track.fileName = entry.fileName ?? track.fileName ?? track.name;
+              const remoteArtist = typeof entry.artist === 'string' ? entry.artist.trim() : '';
+              if (remoteArtist) {
+                const localArtist = (track.artist || '').trim();
+                const remoteTs = Number(entry.updatedAt || 0);
+                const localTs = Number(track.updatedAt || 0);
+                if (!localArtist || remoteTs > localTs) {
+                  track.artist = remoteArtist;
+                }
+              }
+              const remoteAlbum = typeof entry.album === 'string' ? entry.album.trim() : '';
+              if (remoteAlbum) {
+                const localAlbum = (track.album || '').trim();
+                const remoteTs = Number(entry.updatedAt || 0);
+                const localTs = Number(track.updatedAt || 0);
+                if (!localAlbum || remoteTs > localTs) {
+                  track.album = remoteAlbum;
+                }
+              }
               if (Number.isFinite(entry.duration)) {
                 track.duration = entry.duration;
               }
@@ -4454,6 +4782,9 @@ async function pullDropboxPlaylist(token) {
               track.waveform = entry.waveform;
             }
             playlist.tracks.push(track);
+            if (!getTrackArtist(track)) {
+              ensureTrackMetadata(track).catch(() => {});
+            }
           });
         }
         nextPlaylists.push(playlist);
@@ -4472,6 +4803,9 @@ async function pullDropboxPlaylist(token) {
           nextPlaylists.push(playlist);
         }
         playlist.tracks.push(track);
+        if (!getTrackArtist(track)) {
+          ensureTrackMetadata(track).catch(() => {});
+        }
       });
 
       localPlaylistMeta.forEach((meta, playlistId) => {
@@ -4544,6 +4878,24 @@ async function pullDropboxPlaylist(token) {
         existing.isRemote = true;
         existing.urlExpiresAt = 0;
         existing.url = null;
+        const remoteArtist = typeof entry.artist === 'string' ? entry.artist.trim() : '';
+        if (remoteArtist) {
+          const localArtist = (existing.artist || '').trim();
+          const remoteTs = Number(entry.updatedAt || 0);
+          const localTs = Number(existing.updatedAt || 0);
+          if (!localArtist || remoteTs > localTs) {
+            existing.artist = remoteArtist;
+          }
+        }
+        const remoteAlbum = typeof entry.album === 'string' ? entry.album.trim() : '';
+        if (remoteAlbum) {
+          const localAlbum = (existing.album || '').trim();
+          const remoteTs = Number(entry.updatedAt || 0);
+          const localTs = Number(existing.updatedAt || 0);
+          if (!localAlbum || remoteTs > localTs) {
+            existing.album = remoteAlbum;
+          }
+        }
         if (!existing.duration && entry.duration) {
           existing.duration = entry.duration;
         }
@@ -4557,8 +4909,15 @@ async function pullDropboxPlaylist(token) {
           existing.waveform = entry.waveform;
         }
         mergedTracks.push(existing);
+        if (!getTrackArtist(existing)) {
+          ensureTrackMetadata(existing).catch(() => {});
+        }
       } else {
-        mergedTracks.push(deserializeTrack(entry));
+        const track = deserializeTrack(entry);
+        mergedTracks.push(track);
+        if (!getTrackArtist(track)) {
+          ensureTrackMetadata(track).catch(() => {});
+        }
       }
     });
     const unsynced = allLocalTracks.filter(track => !remoteMap.has(track.id));
@@ -5072,10 +5431,30 @@ async function ensureCoverArt(track) {
     if (!buffer) return false;
     // Extraer título del ID3 si existe y actualizar nombre visible
     const tags = extractId3TextFrames(buffer);
-    if (tags && tags.title && !track.userRenamed) {
-      const clean = applySpanishHeuristics(repairMojibake(tags.title)).trim();
-      if (clean && clean !== track.name) {
-        track.name = clean;
+    if (tags) {
+      let metadataChanged = false;
+      if (tags.title && !track.userRenamed) {
+        const cleanTitle = applySpanishHeuristics(repairMojibake(tags.title)).trim();
+        if (cleanTitle && cleanTitle !== track.name) {
+          track.name = cleanTitle;
+          metadataChanged = true;
+        }
+      }
+      if (tags.artist) {
+        const cleanArtist = applySpanishHeuristics(repairMojibake(tags.artist)).trim();
+        if (cleanArtist && cleanArtist !== track.artist) {
+          track.artist = cleanArtist;
+          metadataChanged = true;
+        }
+      }
+      if (tags.album) {
+        const cleanAlbum = applySpanishHeuristics(repairMojibake(tags.album)).trim();
+        if (cleanAlbum && cleanAlbum !== track.album) {
+          track.album = cleanAlbum;
+          metadataChanged = true;
+        }
+      }
+      if (metadataChanged) {
         track.updatedAt = Date.now();
         schedulePlaylistRender();
         updateNowPlaying();
@@ -5314,8 +5693,12 @@ function updateMediaSessionMetadata(track) {
   try {
     navigator.mediaSession.metadata = new MediaMetadata({
       title: getCleanTrackName(t) || 'Pista',
-      artist: '',
-      album: 'EduMix',
+      artist: getTrackArtist(t) || '',
+      album: (() => {
+        if (!t.album) return 'EduMix';
+        try { return applySpanishHeuristics(repairMojibake(String(t.album))).trim() || 'EduMix'; }
+        catch { return String(t.album) || 'EduMix'; }
+      })(),
       artwork,
     });
   } catch {}
@@ -5420,6 +5803,13 @@ async function initialize() {
   }
   scheduleStorageStatsUpdate(0);
   updateSpeedUI();
+  const tracksNeedingMetadata = allTracks.filter(track => !getTrackArtist(track));
+  tracksNeedingMetadata.forEach((track, index) => {
+    const delayMs = Math.min(8000, index * 200);
+    setTimeout(() => {
+      ensureTrackMetadata(track).catch(() => {});
+    }, delayMs);
+  });
   // Lightbox handlers
   // Reparar nombres con mojibake usando ID3 si es posible
   try {

@@ -294,6 +294,15 @@ button.ghost:not(:disabled):hover {
   color: rgba(31, 38, 51, 0.6);
 }
 
+.track-meta {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+  max-width: 100%;
+  white-space: normal;
+}
+
 .track-actions {
   display: inline-flex;
   gap: 0.4rem;
@@ -862,6 +871,12 @@ html[data-theme="dark"] .search-result {
 }
 
 html[data-theme="dark"] .result-meta {
+  color: rgba(226, 232, 240, 0.7);
+}
+html[data-theme="dark"] .track-title span {
+  color: rgba(226, 232, 240, 0.7);
+}
+html[data-theme="dark"] .track-meta {
   color: rgba(226, 232, 240, 0.7);
 }
 html[data-theme="dark"] .loop-indicator { background: rgba(148, 163, 184, 0.35); }

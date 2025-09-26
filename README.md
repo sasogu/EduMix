@@ -18,6 +18,7 @@ Puedes usarla totalmente en local (sin nube) o activar la sincronización para m
   - Reordenar por arrastrar y soltar.
   - Renombrar y eliminar pistas.
   - Valoración por estrellas (1–5) por pista.
+  - Completar automáticamente artista/álbum: primero lee etiquetas ID3 y, si faltan datos, consulta MusicBrainz con peticiones espaciadas.
 
 - Reproducción y mezcla
   - Fundido configurable entre pistas.
