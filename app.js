@@ -760,6 +760,37 @@ function getAllTracks(options = {}) {
     .flatMap(playlist => playlist.tracks);
 }
 
+function trackExistsInPlaylist(playlist, trackId) {
+  if (!playlist || !Array.isArray(playlist.tracks)) return false;
+  return playlist.tracks.some(track => track && track.id === trackId);
+}
+
+function isTrackInOtherManualPlaylists(trackId, excludePlaylistId = null) {
+  return state.playlists.some(playlist => {
+    if (!playlist || playlist.isAuto) return false;
+    if (excludePlaylistId && playlist.id === excludePlaylistId) return false;
+    return trackExistsInPlaylist(playlist, trackId);
+  });
+}
+
+function ensureSharedTrackReferences() {
+  const map = new Map();
+  for (const playlist of state.playlists) {
+    if (!playlist || !Array.isArray(playlist.tracks)) continue;
+    for (let i = 0; i < playlist.tracks.length; i += 1) {
+      const track = playlist.tracks[i];
+      if (!track || !track.id) continue;
+      const existing = map.get(track.id);
+      if (existing) {
+        playlist.tracks[i] = existing;
+      } else {
+        map.set(track.id, track);
+      }
+    }
+  }
+  syncTracksFromActivePlaylist();
+}
+
 function serializeTrack(track) {
   return {
     id: track.id,
@@ -1999,6 +2030,9 @@ playlistEl?.addEventListener('click', event => {
     case 'rename':
       renameTrack(index);
       break;
+    case 'copy':
+      copyTrackToPlaylist(index);
+      break;
     case 'remove':
       removeTrack(index);
       break;
@@ -2551,6 +2585,57 @@ function readDuration(track) {
   }, { once: true });
 }
 
+function copyTrackToPlaylist(index) {
+  const track = state.tracks[index];
+  if (!track) {
+    return;
+  }
+  const source = getActivePlaylist();
+  const manualTargets = state.playlists.filter(playlist => {
+    if (!playlist || playlist.isAuto) return false;
+    if (source && !source.isAuto && playlist.id === source.id) return false;
+    return true;
+  });
+  if (!manualTargets.length) {
+    window.alert('No hay ninguna otra lista manual disponible. Crea una para poder copiar pistas.');
+    return;
+  }
+  const options = manualTargets.map((playlist, idx) => {
+    const hasTrack = trackExistsInPlaylist(playlist, track.id);
+    return `${idx + 1}. ${playlist.name}${hasTrack ? ' (ya contiene la pista)' : ''}`;
+  });
+  const firstAvailable = manualTargets.findIndex(playlist => !trackExistsInPlaylist(playlist, track.id));
+  if (firstAvailable === -1) {
+    window.alert('La pista ya forma parte de todas tus listas manuales.');
+    return;
+  }
+  const message = `Selecciona la lista destino para "${getTrackDisplayTitle(track) || track.name || track.fileName || 'Pista'}":\n\n${options.join('\n')}\n\nIntroduce el número de la lista destino.`;
+  const input = prompt(message, String(firstAvailable + 1));
+  if (input === null) {
+    return;
+  }
+  const choice = Number.parseInt(String(input).trim(), 10);
+  if (!Number.isFinite(choice) || choice < 1 || choice > manualTargets.length) {
+    window.alert('Selección no válida. Intenta de nuevo.');
+    return;
+  }
+  const target = manualTargets[choice - 1];
+  if (trackExistsInPlaylist(target, track.id)) {
+    window.alert(`"${target.name}" ya tiene esta pista.`);
+    return;
+  }
+  target.tracks.push(track);
+  target.updatedAt = Date.now();
+  persistLocalPlaylist();
+  requestDropboxSync();
+  if (state.activePlaylistId === target.id) {
+    syncTracksFromActivePlaylist();
+    renderPlaylist();
+    updateControls();
+  }
+  window.alert(`Pista añadida a "${target.name}".`);
+}
+
 function removeTrack(index) {
   const track = state.tracks[index];
   if (!track) {
@@ -2566,18 +2651,21 @@ function removeTrack(index) {
   if (!confirmed) {
     return;
   }
-  if (!track.isRemote && track.url) {
-    URL.revokeObjectURL(track.url);
-  }
-  pendingUploads.delete(track.id);
-  waveformCache.delete(track.id);
-  if (track.coverUrl) {
-    try { URL.revokeObjectURL(track.coverUrl); } catch {}
-    track.coverUrl = null;
-  }
-  deleteTrackFile(track.id).catch(console.error);
-  if (track.dropboxPath) {
-    pendingDeletions.add(track.dropboxPath);
+  const usedElsewhere = isTrackInOtherManualPlaylists(track.id, active?.id || null);
+  if (!usedElsewhere) {
+    if (!track.isRemote && track.url) {
+      URL.revokeObjectURL(track.url);
+    }
+    pendingUploads.delete(track.id);
+    waveformCache.delete(track.id);
+    if (track.coverUrl) {
+      try { URL.revokeObjectURL(track.coverUrl); } catch {}
+      track.coverUrl = null;
+    }
+    deleteTrackFile(track.id).catch(console.error);
+    if (track.dropboxPath) {
+      pendingDeletions.add(track.dropboxPath);
+    }
   }
   state.tracks.splice(index, 1);
   const playlist = getActivePlaylist();
@@ -3329,6 +3417,26 @@ function renderPlaylist() {
       renameButton.title = 'No disponible en listas automáticas';
     }
 
+    const copyButton = document.createElement('button');
+    copyButton.className = 'ghost icon-button';
+    copyButton.type = 'button';
+    copyButton.textContent = '➕';
+    copyButton.title = 'Añadir a otra lista';
+    copyButton.setAttribute('aria-label', 'Añadir a otra lista');
+    copyButton.dataset.action = 'copy';
+    copyButton.dataset.index = String(index);
+    const copyTargets = state.playlists.filter(pl => {
+      if (!pl || pl.isAuto) return false;
+      if (!activePlaylist) return true;
+      if (!activePlaylist.isAuto && pl.id === activePlaylist.id) return false;
+      return true;
+    });
+    const availableCopyTargets = copyTargets.filter(pl => !trackExistsInPlaylist(pl, track.id));
+    if (!availableCopyTargets.length) {
+      copyButton.disabled = true;
+      copyButton.title = copyTargets.length ? 'Ya está en todas tus listas manuales' : 'Crea otra lista manual para copiar pistas';
+    }
+
     const removeButton = document.createElement('button');
     removeButton.className = 'ghost icon-button';
     removeButton.textContent = '🗑';
@@ -3357,7 +3465,7 @@ function renderPlaylist() {
       updateDropboxUI();
     });
 
-    actions.append(playButton, favoriteButton, renameButton, removeButton, selector);
+    actions.append(playButton, favoriteButton, renameButton, copyButton, removeButton, selector);
     item.append(handle, thumb, title, actions);
     playlistEl.append(item);
 
@@ -3968,6 +4076,7 @@ function loadLocalPlaylist() {
       state.playlists = [fallback];
       state.activePlaylistId = fallback.id;
     }
+    ensureSharedTrackReferences();
     ensurePlaylistsInitialized();
     if (data?.playlistRev || data?.playlistServerModified) {
       dropboxPlaylistMeta.rev = data.playlistRev || null;
@@ -5066,6 +5175,7 @@ async function pullDropboxPlaylist(token) {
       });
 
       state.playlists = nextPlaylists;
+      ensureSharedTrackReferences();
       if (json.activePlaylistId && state.playlists.some(pl => pl.id === json.activePlaylistId)) {
         state.activePlaylistId = json.activePlaylistId;
       }
@@ -5170,6 +5280,7 @@ async function pullDropboxPlaylist(token) {
     const unsynced = allLocalTracks.filter(track => !remoteMap.has(track.id));
     const combined = [...mergedTracks, ...unsynced];
     state.playlists = [createPlaylistObject('Lista Dropbox', combined)];
+    ensureSharedTrackReferences();
     state.activePlaylistId = state.playlists[0].id;
     ensurePlaylistsInitialized();
     persistLocalPlaylist();
@@ -5273,6 +5384,7 @@ function applyRemoteDocumentToState(json) {
       nextPlaylists.push(playlist);
     });
     state.playlists = nextPlaylists;
+    ensureSharedTrackReferences();
     if (json.activePlaylistId) {
       const mapped = idMap.get(json.activePlaylistId) || json.activePlaylistId;
       if (state.playlists.some(pl => pl.id === mapped)) {
@@ -6351,6 +6463,7 @@ async function pullDropboxPlaylistsPerList(token) {
     }
     const removedIds = removedPlaylists.length ? new Set(removedPlaylists.map(pl => pl.id)) : null;
     state.playlists = nextPlaylists;
+    ensureSharedTrackReferences();
     if (removedIds && removedIds.has(state.activePlaylistId)) {
       state.activePlaylistId = state.playlists[0]?.id || null;
     }
