@@ -158,6 +158,8 @@ let dropboxReadInFlight = 0;
 const DROPBOX_READ_CONCURRENCY = 2;
 const remoteLinkInFlight = new Map(); // track.id -> Promise<boolean>
 
+const DEFAULT_PAGE_SIZE = 10;
+
 const state = {
   playlists: [],
   activePlaylistId: null,
@@ -169,7 +171,7 @@ const state = {
   shuffle: false,
   preferLocalSource: true,
   playbackRate: 1,
-  viewPageSize: 0,
+  viewPageSize: DEFAULT_PAGE_SIZE,
   viewPageIndex: 0,
   viewSort: 'none',
   viewMinRating: 0,
@@ -510,10 +512,26 @@ function loadActiveViewPrefs() {
     if (!id) return;
     const vp = viewPerList && typeof viewPerList === 'object' ? viewPerList[id] : null;
     if (vp && typeof vp === 'object') {
-      if (Number.isFinite(vp.pageSize)) state.viewPageSize = Math.max(0, Number(vp.pageSize));
-      if (Number.isFinite(vp.pageIndex)) state.viewPageIndex = Math.max(0, Number(vp.pageIndex));
+      const hasPageSize = Object.prototype.hasOwnProperty.call(vp, 'pageSize');
+      const storedSize = Number(vp.pageSize);
+      const explicitAll = Boolean(vp.pageSizeExplicit);
+      if (Number.isFinite(storedSize) && storedSize > 0) {
+        state.viewPageSize = storedSize;
+      } else if (explicitAll && hasPageSize) {
+        state.viewPageSize = 0;
+      } else {
+        state.viewPageSize = DEFAULT_PAGE_SIZE;
+      }
+      if (Number.isFinite(vp.pageIndex)) {
+        state.viewPageIndex = Math.max(0, Number(vp.pageIndex));
+      } else {
+        state.viewPageIndex = 0;
+      }
       if (typeof vp.sort === 'string') state.viewSort = vp.sort;
       if (Number.isFinite(vp.minRating)) state.viewMinRating = Math.max(0, Math.min(5, Number(vp.minRating)));
+    } else {
+      state.viewPageSize = DEFAULT_PAGE_SIZE;
+      state.viewPageIndex = 0;
     }
   } catch {}
 }
@@ -1814,7 +1832,14 @@ pageSizeSelect?.addEventListener('change', () => {
   state.viewPageIndex = 0;
   const id = state.activePlaylistId;
   if (id) {
-    viewPerList[id] = { ...(viewPerList[id] || {}), pageSize: state.viewPageSize, pageIndex: state.viewPageIndex, sort: state.viewSort, minRating: state.viewMinRating };
+    viewPerList[id] = {
+      ...(viewPerList[id] || {}),
+      pageSize: state.viewPageSize,
+      pageSizeExplicit: state.viewPageSize === 0,
+      pageIndex: state.viewPageIndex,
+      sort: state.viewSort,
+      minRating: state.viewMinRating,
+    };
   }
   renderPlaylist();
   persistLocalPlaylist();
@@ -1826,7 +1851,14 @@ sortSelect?.addEventListener('change', () => {
   state.viewPageIndex = 0;
   const id = state.activePlaylistId;
   if (id) {
-    viewPerList[id] = { ...(viewPerList[id] || {}), sort: state.viewSort, pageIndex: state.viewPageIndex, pageSize: state.viewPageSize, minRating: state.viewMinRating };
+    viewPerList[id] = {
+      ...(viewPerList[id] || {}),
+      sort: state.viewSort,
+      pageIndex: state.viewPageIndex,
+      pageSize: state.viewPageSize,
+      pageSizeExplicit: state.viewPageSize === 0,
+      minRating: state.viewMinRating,
+    };
   }
   renderPlaylist();
   persistLocalPlaylist();
@@ -1838,7 +1870,14 @@ minRatingSelect?.addEventListener('change', () => {
   state.viewPageIndex = 0;
   const id = state.activePlaylistId;
   if (id) {
-    viewPerList[id] = { ...(viewPerList[id] || {}), minRating: state.viewMinRating, pageIndex: state.viewPageIndex, sort: state.viewSort, pageSize: state.viewPageSize };
+    viewPerList[id] = {
+      ...(viewPerList[id] || {}),
+      minRating: state.viewMinRating,
+      pageIndex: state.viewPageIndex,
+      sort: state.viewSort,
+      pageSize: state.viewPageSize,
+      pageSizeExplicit: state.viewPageSize === 0,
+    };
   }
   renderPlaylist();
   persistLocalPlaylist();
@@ -3811,7 +3850,13 @@ function writePlaylistSnapshot() {
     playlistServerModified: dropboxPlaylistMeta.serverModified || null,
     perListMeta: dropboxPerListMeta,
     settingsMeta: dropboxSettingsMeta,
-    view: { pageSize: state.viewPageSize, pageIndex: state.viewPageIndex, sort: state.viewSort, minRating: state.viewMinRating },
+    view: {
+      pageSize: state.viewPageSize,
+      pageSizeExplicit: state.viewPageSize === 0,
+      pageIndex: state.viewPageIndex,
+      sort: state.viewSort,
+      minRating: state.viewMinRating,
+    },
     pendingDeletions: Array.from(pendingDeletions),
     selectedForSyncIds: Array.from(selectedForSync),
     updatedAt: Date.now(),
@@ -3829,6 +3874,7 @@ function writePlaylistSnapshot() {
     if (activeId) {
       viewPerList[activeId] = {
         pageSize: state.viewPageSize,
+        pageSizeExplicit: state.viewPageSize === 0,
         pageIndex: state.viewPageIndex,
         sort: state.viewSort || 'none',
         minRating: state.viewMinRating || 0,
@@ -3933,16 +3979,30 @@ function loadLocalPlaylist() {
     if (data?.settingsMeta && typeof data.settingsMeta === 'object') {
       dropboxSettingsMeta = data.settingsMeta;
     }
+    let resolvedPageSize = DEFAULT_PAGE_SIZE;
     if (data?.view) {
-      if (Number.isFinite(data.view.pageSize)) state.viewPageSize = Number(data.view.pageSize);
-      if (Number.isFinite(data.view.pageIndex)) state.viewPageIndex = Number(data.view.pageIndex);
-      if (pageSizeSelect) pageSizeSelect.value = String(state.viewPageSize || 0);
+      const storedSize = Number(data.view.pageSize);
+      const explicitAll = Boolean(data.view.pageSizeExplicit);
+      if (Number.isFinite(storedSize) && storedSize > 0) {
+        resolvedPageSize = storedSize;
+      } else if (explicitAll) {
+        resolvedPageSize = 0;
+      }
+      state.viewPageSize = resolvedPageSize;
+      if (Number.isFinite(data.view.pageIndex)) {
+        state.viewPageIndex = Number(data.view.pageIndex);
+      } else {
+        state.viewPageIndex = 0;
+      }
+      if (pageSizeSelect) pageSizeSelect.value = String(resolvedPageSize || 0);
       if (typeof data.view.sort === 'string') state.viewSort = data.view.sort;
       if (sortSelect) sortSelect.value = state.viewSort || 'none';
       if (Number.isFinite(data.view.minRating)) state.viewMinRating = Number(data.view.minRating) || 0;
       if (minRatingSelect) minRatingSelect.value = String(state.viewMinRating || 0);
-    } else if (pageSizeSelect) {
-      pageSizeSelect.value = '0';
+    } else {
+      state.viewPageSize = DEFAULT_PAGE_SIZE;
+      state.viewPageIndex = 0;
+      if (pageSizeSelect) pageSizeSelect.value = String(DEFAULT_PAGE_SIZE);
     }
     if (Number.isFinite(data?.playbackRate)) {
       state.playbackRate = Number(data.playbackRate) || 1;
