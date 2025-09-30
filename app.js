@@ -361,6 +361,9 @@ const WAVEFORM_SAMPLES = 800;
 const WAVEFORM_MAX_SAMPLES_PER_BUCKET = 2048;
 const WAVEFORM_YIELD_EVERY_BUCKETS = 32;
 const MAX_WAVEFORM_CONCURRENCY = 1;
+const WAVEFORM_MAX_SOURCE_BYTES = 32 * 1024 * 1024; // evita decodificar pistas >32 MB
+const WAVEFORM_MAX_SOURCE_DURATION = 20 * 60; // evita decodificar pistas >20 min
+const COVER_ART_MAX_SOURCE_BYTES = 1 * 1024 * 1024; // 1 MB es suficiente para las cabeceras ID3
 const PERSIST_DEBOUNCE_MS = 250;
 const EQ_BAND_BOOST = { bass: 6, mid: 4, treble: 6 };
 const EQ_SMOOTHING = 0.12;
@@ -811,6 +814,7 @@ function serializeTrack(track) {
     dropboxSize: track.dropboxSize ?? null,
     dropboxUpdatedAt: track.dropboxUpdatedAt ?? null,
     waveform: track.waveform ?? null,
+    waveformStatus: track.waveformStatus ?? null,
   };
 }
 
@@ -835,6 +839,7 @@ function serializeTrackLocal(track) {
     dropboxSize: track.dropboxSize ?? null,
     dropboxUpdatedAt: track.dropboxUpdatedAt ?? null,
     // waveform intentionally omitted
+    waveformStatus: track.waveformStatus ?? null,
   };
 }
 
@@ -859,6 +864,7 @@ function deserializeTrack(entry) {
     dropboxSize: entry.dropboxSize ?? null,
     dropboxUpdatedAt: entry.dropboxUpdatedAt ?? null,
     waveform: entry.waveform ?? null,
+    waveformStatus: entry.waveformStatus ?? null,
     urlExpiresAt: 0,
     isRemote: Boolean(entry.dropboxPath),
   };
@@ -1287,10 +1293,24 @@ function setWaveformTrack(track) {
   waveformState.trackId = track.id;
   waveformState.duration = track.duration ?? waveformState.duration ?? 0;
   waveformState.progress = 0;
+  if (track.waveformStatus && track.waveformStatus.startsWith('disabled')) {
+    waveformState.peaks = null;
+    waveformContainer.classList.remove('is-loading');
+    waveformContainer.classList.remove('has-data');
+    if (waveformMessage) {
+      waveformMessage.textContent = getWaveformDisabledMessage(track);
+    }
+    drawWaveform(null, 0);
+    return;
+  }
   if (track.waveform?.peaks?.length) {
     waveformState.peaks = track.waveform.peaks;
     waveformState.duration = track.waveform.duration ?? waveformState.duration;
     waveformContainer.classList.remove('is-loading');
+    waveformContainer.classList.add('has-data');
+    if (waveformMessage) {
+      waveformMessage.textContent = '';
+    }
     drawWaveform(waveformState.peaks, waveformState.progress);
   } else {
     waveformState.peaks = null;
@@ -1305,9 +1325,21 @@ function setWaveformTrack(track) {
         if (!result || waveformState.trackId !== track.id) {
           return;
         }
+        waveformContainer.classList.remove('is-loading');
+        if (result.disabled) {
+          waveformContainer.classList.remove('has-data');
+          if (waveformMessage) {
+            waveformMessage.textContent = getWaveformDisabledMessage(track);
+          }
+          drawWaveform(null, 0);
+          return;
+        }
         waveformState.peaks = result.peaks;
         waveformState.duration = result.duration ?? waveformState.duration;
-        waveformContainer.classList.remove('is-loading');
+        waveformContainer.classList.add('has-data');
+        if (waveformMessage) {
+          waveformMessage.textContent = '';
+        }
         drawWaveform(waveformState.peaks, waveformState.progress);
       })
       .catch(error => {
@@ -1321,6 +1353,23 @@ function setWaveformTrack(track) {
         }
       });
   }
+}
+
+function getWaveformDisabledMessage(track) {
+  if (!track || !track.waveformStatus) {
+    return 'Forma de onda no disponible para esta pista.';
+  }
+  if (track.waveformStatus === 'disabled:size') {
+    const size = firstFiniteNumber([track.size, track.dropboxSize]);
+    const formatted = size ? formatBytes(size) : formatBytes(WAVEFORM_MAX_SOURCE_BYTES);
+    return `Forma de onda desactivada: archivo demasiado grande (${formatted}).`;
+  }
+  if (track.waveformStatus === 'disabled:duration') {
+    const duration = Number(track.duration);
+    const formatted = Number.isFinite(duration) ? formatDuration(duration) : formatDuration(WAVEFORM_MAX_SOURCE_DURATION);
+    return `Forma de onda desactivada: pista demasiado larga (${formatted}).`;
+  }
+  return 'Forma de onda no disponible para esta pista.';
 }
 
 function scheduleWaveformResize() {
@@ -1455,12 +1504,60 @@ function toggleEqBand(band) {
   persistLocalPlaylist();
 }
 
+function firstFiniteNumber(values) {
+  if (!values) {
+    return null;
+  }
+  for (const raw of values) {
+    const num = Number(raw);
+    if (Number.isFinite(num) && num > 0) {
+      return num;
+    }
+  }
+  return null;
+}
+
+function evaluateWaveformLimits({ size, duration }) {
+  const durationNum = Number(duration);
+  if (Number.isFinite(durationNum) && durationNum > WAVEFORM_MAX_SOURCE_DURATION) {
+    return { reason: 'duration', duration: durationNum };
+  }
+  const sizeNum = Number(size);
+  if (Number.isFinite(sizeNum) && sizeNum > WAVEFORM_MAX_SOURCE_BYTES) {
+    return { reason: 'size', size: sizeNum };
+  }
+  return null;
+}
+
+function markWaveformDisabled(track, reason) {
+  const status = reason === 'duration' ? 'disabled:duration' : 'disabled:size';
+  if (track) {
+    const changed = track.waveformStatus !== status;
+    track.waveformStatus = status;
+    if (changed) {
+      persistLocalPlaylist();
+      requestDropboxSync();
+    }
+  }
+  return {
+    disabled: true,
+    reason,
+    peaks: null,
+    duration: track?.duration ?? null,
+  };
+}
+
 async function ensureWaveform(track) {
   if (!track) {
     return null;
   }
   if (track.waveform?.peaks?.length) {
     return track.waveform;
+  }
+  if (track.waveformStatus && track.waveformStatus.startsWith('disabled')) {
+    const reason = track.waveformStatus === 'disabled:duration' ? 'duration' : 'size';
+    const disabled = markWaveformDisabled(track, reason);
+    return disabled;
   }
   if (waveformCache.has(track.id)) {
     return waveformCache.get(track.id);
@@ -1469,14 +1566,29 @@ async function ensureWaveform(track) {
     let arrayBuffer = null;
     await acquireWaveformSlot();
     try {
+      const durationHint = track.duration;
       const file = pendingUploads.get(track.id);
+      const hintSize = firstFiniteNumber([file?.size, track.size, track.dropboxSize]);
+      const hintedLimit = evaluateWaveformLimits({ size: hintSize, duration: durationHint });
+      if (hintedLimit) {
+        return markWaveformDisabled(track, hintedLimit.reason);
+      }
       if (file) {
         arrayBuffer = await file.arrayBuffer();
       } else {
         const stored = await loadTrackFile(track.id);
-        if (stored) {
+        const storedSize = firstFiniteNumber([stored?.size]);
+        const storedLimit = evaluateWaveformLimits({ size: storedSize ?? hintSize, duration: durationHint });
+        if (storedLimit) {
+          return markWaveformDisabled(track, storedLimit.reason);
+        }
+        if (stored?.buffer) {
           arrayBuffer = stored.buffer;
         } else if (track.isRemote || track.dropboxPath) {
+          const remoteLimit = evaluateWaveformLimits({ size: track.dropboxSize, duration: durationHint });
+          if (remoteLimit) {
+            return markWaveformDisabled(track, remoteLimit.reason);
+          }
           const ready = await ensureTrackRemoteLink(track);
           if (!ready) {
             return null;
@@ -1485,12 +1597,22 @@ async function ensureWaveform(track) {
           if (!response.ok) {
             throw new Error('No se pudo descargar la pista para la forma de onda');
           }
-          arrayBuffer = await response.arrayBuffer();
+          const fetched = await response.arrayBuffer();
+          const fetchedLimit = evaluateWaveformLimits({ size: fetched.byteLength, duration: durationHint });
+          if (fetchedLimit) {
+            return markWaveformDisabled(track, fetchedLimit.reason);
+          }
+          arrayBuffer = fetched;
         } else if (track.url && track.url.startsWith('blob:')) {
           try {
             const response = await fetch(track.url);
             if (response.ok) {
-              arrayBuffer = await response.arrayBuffer();
+              const fetched = await response.arrayBuffer();
+              const fetchedLimit = evaluateWaveformLimits({ size: fetched.byteLength, duration: durationHint });
+              if (fetchedLimit) {
+                return markWaveformDisabled(track, fetchedLimit.reason);
+              }
+              arrayBuffer = fetched;
             }
           } catch (error) {
             console.warn('No se pudo leer el blob local para la forma de onda', error);
@@ -1500,8 +1622,13 @@ async function ensureWaveform(track) {
       if (!arrayBuffer) {
         return null;
       }
+      const bufferLimit = evaluateWaveformLimits({ size: arrayBuffer.byteLength, duration: durationHint });
+      if (bufferLimit) {
+        return markWaveformDisabled(track, bufferLimit.reason);
+      }
       const waveform = await computeWaveformFromArrayBuffer(arrayBuffer);
       track.waveform = waveform;
+      track.waveformStatus = null;
       // Calcular ganancia de normalización basada en picos
       if (Array.isArray(waveform.peaks) && waveform.peaks.length) {
         track.normalizationGain = computeNormalizationFromPeaks(waveform.peaks);
@@ -2535,6 +2662,7 @@ function addTracks(files) {
         dropboxSize: null,
         dropboxUpdatedAt: null,
         waveform: null,
+        waveformStatus: null,
         urlExpiresAt: 0,
         isRemote: false,
       };
@@ -5136,6 +5264,9 @@ async function pullDropboxPlaylist(token) {
             track.urlExpiresAt = 0;
             if (entry.waveform?.peaks?.length) {
               track.waveform = entry.waveform;
+              track.waveformStatus = entry.waveformStatus ?? null;
+            } else if (typeof entry.waveformStatus === 'string') {
+              track.waveformStatus = entry.waveformStatus;
             }
             playlist.tracks.push(track);
             if (!getTrackArtist(track)) {
@@ -5264,6 +5395,9 @@ async function pullDropboxPlaylist(token) {
         }
         if (entry.waveform?.peaks?.length) {
           existing.waveform = entry.waveform;
+          existing.waveformStatus = entry.waveformStatus ?? null;
+        } else if (typeof entry.waveformStatus === 'string') {
+          existing.waveformStatus = entry.waveformStatus;
         }
         mergedTracks.push(existing);
         if (!getTrackArtist(existing)) {
@@ -5373,7 +5507,12 @@ function applyRemoteDocumentToState(json) {
           }
           track.url = null;
           track.urlExpiresAt = 0;
-          if (entry.waveform?.peaks?.length) track.waveform = entry.waveform;
+          if (entry.waveform?.peaks?.length) {
+            track.waveform = entry.waveform;
+            track.waveformStatus = entry.waveformStatus ?? null;
+          } else if (typeof entry.waveformStatus === 'string') {
+            track.waveformStatus = entry.waveformStatus;
+          }
           track.updatedAt = entry.updatedAt ?? track.updatedAt ?? null;
           playlist.tracks.push(track);
           if (!getTrackArtist(track) && track.isFavorite) {
@@ -5792,12 +5931,20 @@ async function ensureCoverArt(track) {
     if (track.coverUrl && !needTitleFix) return false;
     let buffer = null;
     const file = pendingUploads.get(track.id);
+    const sizeHint = firstFiniteNumber([file?.size, track.size, track.dropboxSize]);
+    const coverLimit = COVER_ART_MAX_SOURCE_BYTES * 12; // pequeño margen sobre el límite real
+    if (!file && Number.isFinite(sizeHint) && sizeHint > coverLimit) {
+      return false;
+    }
     if (file) {
-      buffer = await file.arrayBuffer();
+      const sliceSize = Math.min(file.size || COVER_ART_MAX_SOURCE_BYTES, COVER_ART_MAX_SOURCE_BYTES);
+      const slice = typeof file.slice === 'function' ? file.slice(0, sliceSize) : file;
+      buffer = await slice.arrayBuffer();
     } else {
       const stored = await loadTrackFile(track.id);
       if (stored?.buffer) {
-        buffer = stored.buffer;
+        const sliceSize = Math.min(stored.buffer.byteLength, COVER_ART_MAX_SOURCE_BYTES);
+        buffer = stored.buffer.slice(0, sliceSize);
       } else if ((track.isRemote || track.dropboxPath)) {
         // Evitar tormenta de peticiones si hay backoff o concurrencia llena
         const now = Date.now();
@@ -5811,13 +5958,31 @@ async function ensureCoverArt(track) {
         if (!ready) return false;
         // Prefer leer de IDB para no volver a descargar
         const again = await loadTrackFile(track.id);
-        if (again?.buffer) buffer = again.buffer;
+        if (again?.buffer) {
+          const sliceSize = Math.min(again.buffer.byteLength, COVER_ART_MAX_SOURCE_BYTES);
+          buffer = again.buffer.slice(0, sliceSize);
+        }
         if (!buffer && track.url) {
-          const resp = await fetch(track.url);
-          if (resp.ok) buffer = await resp.arrayBuffer();
+          const rangeHeader = `bytes=0-${COVER_ART_MAX_SOURCE_BYTES - 1}`;
+          const resp = await fetch(track.url, { headers: { Range: rangeHeader }, mode: 'cors' }).catch(() => null);
+          if (resp && resp.ok) {
+            const contentLength = Number(resp.headers.get('Content-Length') || 0);
+            if (!contentLength || contentLength <= coverLimit || resp.status === 206) {
+              buffer = await resp.arrayBuffer();
+              if (buffer.byteLength > COVER_ART_MAX_SOURCE_BYTES) {
+                buffer = buffer.slice(0, COVER_ART_MAX_SOURCE_BYTES);
+              }
+            }
+          }
         }
       } else if (track.url && track.url.startsWith('blob:')) {
-        try { const resp = await fetch(track.url); if (resp.ok) buffer = await resp.arrayBuffer(); } catch {}
+        try {
+          const resp = await fetch(track.url);
+          if (resp.ok) {
+            const arrayBuffer = await resp.arrayBuffer();
+            buffer = arrayBuffer.slice(0, Math.min(arrayBuffer.byteLength, COVER_ART_MAX_SOURCE_BYTES));
+          }
+        } catch {}
       }
     }
     if (!buffer) return false;
@@ -6411,7 +6576,12 @@ async function pullDropboxPlaylistsPerList(token) {
           }
           track.url = null;
           track.urlExpiresAt = 0;
-          if (entry.waveform?.peaks?.length) track.waveform = entry.waveform;
+          if (entry.waveform?.peaks?.length) {
+            track.waveform = entry.waveform;
+            track.waveformStatus = entry.waveformStatus ?? null;
+          } else if (typeof entry.waveformStatus === 'string') {
+            track.waveformStatus = entry.waveformStatus;
+          }
           track.updatedAt = entry.updatedAt ?? track.updatedAt ?? null;
           playlist.tracks.push(track);
           if (!getTrackArtist(track) && track.isFavorite) {
