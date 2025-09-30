@@ -152,6 +152,8 @@ const dropboxConfig = {
 
 dropboxConfig.redirectUri = `${window.location.origin}${window.location.pathname}`;
 
+const DROPBOX_AUTO_SYNC_MAX_BYTES = 150 * 1024 * 1024; // ~150 MB límite para auto-sync
+
 // ===== Control de concurrencia y backoff para lecturas Dropbox =====
 let dropboxReadAvailableAt = 0;
 let dropboxReadInFlight = 0;
@@ -323,11 +325,14 @@ const dropboxState = {
   syncQueued: null,
   lastSync: null,
   error: null,
+  largeSyncNotice: null,
 };
 dropboxState.netStrikes = 0;
 dropboxState.pausedUntil = 0;
 dropboxState.progressTotal = 0;
 dropboxState.progressDone = 0;
+dropboxState.pendingBytesTotal = 0;
+dropboxState.pendingBytesDone = 0;
 // Metadatos de playlist.json en Dropbox (control de versión)
 // Metadatos del fichero único (legacy)
 let dropboxPlaylistMeta = { rev: null, serverModified: null };
@@ -2560,6 +2565,10 @@ autoSyncToggle?.addEventListener('change', () => {
   state.autoSync = !!autoSyncToggle.checked;
   persistLocalPlaylist();
   // No disparamos sync; se respetará la preferencia a partir de ahora y se guardará en settings en la próxima sync
+  if (!state.autoSync && dropboxState.largeSyncNotice) {
+    dropboxState.largeSyncNotice = null;
+    updateDropboxUI();
+  }
 });
 
 pagerNextBtn?.addEventListener('click', () => {
@@ -4373,10 +4382,21 @@ function updateDropboxUI() {
     dropboxStatusEl.classList.add('is-error');
     cloudSyncCard.classList.add('is-error');
   } else {
-    if (dropboxState.isSyncing && dropboxState.progressTotal > 0) {
-      dropboxStatusEl.textContent = `Sincronizando… ${Math.min(dropboxState.progressDone, dropboxState.progressTotal)}/${dropboxState.progressTotal}`;
+    if (dropboxState.isSyncing) {
+      const total = Math.max(0, Number(dropboxState.progressTotal) || 0);
+      const done = Math.max(0, Math.min(total, Number(dropboxState.progressDone) || 0));
+      const bytesTotal = Number(dropboxState.pendingBytesTotal) || 0;
+      const bytesDone = Math.max(0, Math.min(bytesTotal, Number(dropboxState.pendingBytesDone) || 0));
+      const countText = total > 0 ? `${done}/${total}` : '';
+      const bytesText = bytesTotal > 0 ? ` (${formatBytes(bytesDone)} / ${formatBytes(bytesTotal)})` : '';
+      dropboxStatusEl.textContent = `Sincronizando…${countText ? ` ${countText}` : ''}${bytesText}`;
+    } else if (dropboxState.largeSyncNotice) {
+      const info = dropboxState.largeSyncNotice;
+      const count = Number(info?.count) || 0;
+      const bytesText = Number(info?.totalBytes) > 0 ? ` (~${formatBytes(info.totalBytes)})` : '';
+      dropboxStatusEl.textContent = `Pendiente: ${count} subida${count === 1 ? '' : 's'}${bytesText}.`;
     } else {
-      dropboxStatusEl.textContent = dropboxState.isSyncing ? 'Sincronizando…' : 'Conectado';
+      dropboxStatusEl.textContent = 'Conectado';
     }
     dropboxStatusEl.classList.remove('is-error');
     cloudSyncCard.classList.remove('is-error');
@@ -4435,22 +4455,37 @@ function updateDropboxUI() {
 
   // Aviso de cambios pendientes en modo manual
   if (pendingNoticeEl) {
-    const pending = getPendingDropboxChanges();
-    if (!dropboxState.isSyncing && !state.autoSync && (pending.uploads > 0 || pending.deletes > 0 || pending.listsChanged > 0)) {
-      const parts = [];
-      if (pending.uploads > 0) parts.push(`${pending.uploads} subida${pending.uploads !== 1 ? 's' : ''}`);
-      if (pending.deletes > 0) parts.push(`${pending.deletes} eliminación${pending.deletes !== 1 ? 'es' : ''}`);
-      if (pending.listsChanged > 0) parts.push(`${pending.listsChanged} lista${pending.listsChanged !== 1 ? 's' : ''} modificada${pending.listsChanged !== 1 ? 's' : ''}`);
+    const autoLimit = dropboxState.largeSyncNotice && dropboxState.largeSyncNotice.reason === 'auto-limit';
+    if (autoLimit && !dropboxState.isSyncing) {
+      const info = dropboxState.largeSyncNotice;
+      const count = Number(info?.count) || 0;
+      const bytesText = Number(info?.totalBytes) > 0 ? ` (~${formatBytes(info.totalBytes)})` : '';
+      const text = `Sincronización automática pausada: ${count} pista${count === 1 ? '' : 's'} pendientes${bytesText}. Pulsa “Sincronizar ahora”.`;
       if (pendingNoticeTextEl) {
-        pendingNoticeTextEl.textContent = `Cambios pendientes: ${parts.join(', ')}.`;
+        pendingNoticeTextEl.textContent = text;
       } else {
-        pendingNoticeEl.textContent = `Cambios pendientes: ${parts.join(', ')}.`;
+        pendingNoticeEl.textContent = text;
       }
-      if (pendingSyncNowBtn) pendingSyncNowBtn.disabled = false;
+      if (pendingSyncNowBtn) pendingSyncNowBtn.disabled = dropboxState.isSyncing;
       pendingNoticeEl.hidden = false;
     } else {
-      if (pendingSyncNowBtn) pendingSyncNowBtn.disabled = true;
-      pendingNoticeEl.hidden = true;
+      const pending = getPendingDropboxChanges();
+      if (!dropboxState.isSyncing && !state.autoSync && (pending.uploads > 0 || pending.deletes > 0 || pending.listsChanged > 0)) {
+        const parts = [];
+        if (pending.uploads > 0) parts.push(`${pending.uploads} subida${pending.uploads !== 1 ? 's' : ''}`);
+        if (pending.deletes > 0) parts.push(`${pending.deletes} eliminación${pending.deletes !== 1 ? 'es' : ''}`);
+        if (pending.listsChanged > 0) parts.push(`${pending.listsChanged} lista${pending.listsChanged !== 1 ? 's' : ''} modificada${pending.listsChanged !== 1 ? 's' : ''}`);
+        if (pendingNoticeTextEl) {
+          pendingNoticeTextEl.textContent = `Cambios pendientes: ${parts.join(', ')}.`;
+        } else {
+          pendingNoticeEl.textContent = `Cambios pendientes: ${parts.join(', ')}.`;
+        }
+        if (pendingSyncNowBtn) pendingSyncNowBtn.disabled = false;
+        pendingNoticeEl.hidden = false;
+      } else {
+        if (pendingSyncNowBtn) pendingSyncNowBtn.disabled = true;
+        pendingNoticeEl.hidden = true;
+      }
     }
   }
 }
@@ -4595,6 +4630,44 @@ async function ensureDropboxToken() {
   }
 }
 
+function estimateTrackUploadSize(track) {
+  if (!track) {
+    return null;
+  }
+  const file = pendingUploads.get(track.id);
+  if (file && Number.isFinite(file.size) && file.size > 0) {
+    return file.size;
+  }
+  if (Number.isFinite(track.size) && track.size > 0) {
+    return track.size;
+  }
+  if (Number.isFinite(track.dropboxSize) && track.dropboxSize > 0) {
+    return track.dropboxSize;
+  }
+  if (track._localTooLarge) {
+    return IDB_MAX_VALUE_BYTES;
+  }
+  return null;
+}
+
+function estimateUploadPlan(tracks) {
+  const sizeByTrack = new Map();
+  let totalBytes = 0;
+  if (Array.isArray(tracks)) {
+    tracks.forEach(track => {
+      if (!track || !track.id || sizeByTrack.has(track.id)) {
+        return;
+      }
+      const size = estimateTrackUploadSize(track);
+      if (Number.isFinite(size) && size > 0) {
+        sizeByTrack.set(track.id, size);
+        totalBytes += size;
+      }
+    });
+  }
+  return { totalBytes, sizeByTrack };
+}
+
 async function performDropboxSync(options = {}) {
   if (!isDropboxConnected()) {
     return;
@@ -4613,6 +4686,7 @@ async function performDropboxSync(options = {}) {
   const effective = {
     loadRemote: Boolean(options.loadRemote),
     onlyTrackIds: Array.isArray(options.onlyTrackIds) ? options.onlyTrackIds.slice() : null,
+    triggeredAutomatically: Boolean(options.triggeredAutomatically),
   };
   if (dropboxState.isSyncing) {
     const queuedIds = new Set([...(dropboxState.syncQueued?.onlyTrackIds || []), ...(effective.onlyTrackIds || [])]);
@@ -4622,8 +4696,6 @@ async function performDropboxSync(options = {}) {
     };
     return;
   }
-  dropboxState.isSyncing = true;
-  dropboxState.error = null;
   // preparar progreso
   // Si es selección manual (onlyTrackIds), el subconjunto puede abarcar todas las listas.
   // Si no, "Sincronizar ahora" debe afectar solo a la lista activa.
@@ -4631,8 +4703,40 @@ async function performDropboxSync(options = {}) {
   const baseCandidates = scopeTracks.filter(track => !track.dropboxPath);
   const isManualSubset = !!effective.onlyTrackIds;
   let candidates = isManualSubset ? baseCandidates.filter(t => effective.onlyTrackIds.includes(t.id)) : baseCandidates;
+  const { totalBytes: estimatedBytes, sizeByTrack } = estimateUploadPlan(candidates);
+
+  if (effective.triggeredAutomatically && estimatedBytes > DROPBOX_AUTO_SYNC_MAX_BYTES && candidates.length) {
+    dropboxState.largeSyncNotice = {
+      reason: 'auto-limit',
+      count: candidates.length,
+      totalBytes: estimatedBytes,
+    };
+    dropboxState.pendingBytesTotal = estimatedBytes;
+    dropboxState.pendingBytesDone = 0;
+    dropboxState.progressTotal = candidates.length;
+    dropboxState.progressDone = 0;
+    updateDropboxUI();
+    if (pendingNoticeEl) {
+      const bytesText = estimatedBytes ? formatBytes(estimatedBytes) : '';
+      const text = `Sincronización automática pausada: ${candidates.length} pista${candidates.length === 1 ? '' : 's'} pendientes${bytesText ? ` (~${bytesText})` : ''}. Pulsa “Sincronizar ahora”.`;
+      if (pendingNoticeTextEl) {
+        pendingNoticeTextEl.textContent = text;
+      } else {
+        pendingNoticeEl.textContent = text;
+      }
+      pendingNoticeEl.hidden = false;
+      if (pendingSyncNowBtn) pendingSyncNowBtn.disabled = false;
+    }
+    return;
+  }
+
+  dropboxState.isSyncing = true;
+  dropboxState.error = null;
+  dropboxState.largeSyncNotice = null;
   dropboxState.progressTotal = candidates.length;
   dropboxState.progressDone = 0;
+  dropboxState.pendingBytesTotal = estimatedBytes;
+  dropboxState.pendingBytesDone = 0;
   // marcar en cola
   candidates.forEach(t => { t._sync = 'queued'; });
   renderPlaylist();
@@ -4651,7 +4755,7 @@ async function performDropboxSync(options = {}) {
         await pullDropboxPlaylist(token);
       }
     }
-    await uploadPendingTracks(token, candidates);
+    await uploadPendingTracks(token, candidates, { sizeByTrack });
     await processPendingDeletions(token);
     // Si aún quedan pendientes tras el batch, intenta borrarlos uno a uno (delete_v2)
     if (pendingDeletions && pendingDeletions.size > 0) {
@@ -4682,6 +4786,8 @@ async function performDropboxSync(options = {}) {
     dropboxState.isSyncing = false;
     dropboxState.progressTotal = 0;
     dropboxState.progressDone = 0;
+    dropboxState.pendingBytesTotal = 0;
+    dropboxState.pendingBytesDone = 0;
     getAllTracks().forEach(t => { if (t._sync && t._sync !== 'error') delete t._sync; });
     updateDropboxUI();
     const queued = dropboxState.syncQueued;
@@ -4986,8 +5092,9 @@ async function uploadOneTrackWithRetry(token, track) {
   }
 }
 
-async function uploadPendingTracks(token, list) {
+async function uploadPendingTracks(token, list, options = {}) {
   let candidates = Array.isArray(list) ? list : getAllTracks().filter(track => !track.dropboxPath);
+  const sizeByTrack = options?.sizeByTrack instanceof Map ? options.sizeByTrack : new Map();
   if (!candidates.length) return;
 
   const CONCURRENCY = 1;
@@ -5003,6 +5110,13 @@ async function uploadPendingTracks(token, list) {
       await uploadOneTrackWithRetry(token, track);
       if (track.dropboxPath) {
         dropboxState.progressDone += 1;
+        const size = sizeByTrack.get(track.id) || estimateTrackUploadSize(track) || 0;
+        if (Number.isFinite(size) && size > 0) {
+          dropboxState.pendingBytesDone += size;
+          if (Number.isFinite(dropboxState.pendingBytesTotal) && dropboxState.pendingBytesTotal > 0) {
+            dropboxState.pendingBytesDone = Math.min(dropboxState.pendingBytesDone, dropboxState.pendingBytesTotal);
+          }
+        }
         track._sync = 'done';
       } else {
         track._sync = track._sync || null;
@@ -5746,7 +5860,7 @@ function requestDropboxSync(options = {}) {
     // Sin auto-sync: solo sincroniza cuando el usuario pulsa los botones explícitos
     return;
   }
-  performDropboxSync(options).catch(console.error);
+  performDropboxSync({ ...options, triggeredAutomatically: true }).catch(console.error);
 }
 
 async function generateCodeVerifier() {
