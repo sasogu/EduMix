@@ -6669,11 +6669,16 @@ async function pullDropboxPlaylistsPerList(token) {
         autoType: doc.autoType || (autoConfig ? 'favorites' : null),
       };
       dropboxPerListMeta[id] = { path, rev: meta?.rev || null, serverModified: meta?.server_modified || null };
+      const seenIds = new Set();
       if (Array.isArray(doc.tracks)) {
         doc.tracks.forEach(entry => {
           if (!entry?.id) return;
           const existing = mapLocalTracks.get(entry.id)?.track;
           const track = existing ? existing : deserializeTrack(entry);
+          if (existing) {
+            mapLocalTracks.delete(entry.id);
+          }
+          seenIds.add(entry.id);
           // Merge de nombre (ver bloque anterior)
           const remoteHasName2 = typeof entry.name === 'string' && entry.name.length > 0;
           const localRenamed2 = !!track.userRenamed;
@@ -6726,6 +6731,19 @@ async function pullDropboxPlaylistsPerList(token) {
           if (!getTrackArtist(track) && track.isFavorite) {
             ensureTrackMetadata(track).catch(() => {});
           }
+        });
+      }
+      // Añadir pistas locales que aún no existen en remoto para evitar perderlas tras el merge
+      const localExisting = state.playlists.find(pl => pl.id === id);
+      if (localExisting) {
+        localExisting.tracks.forEach(localTrack => {
+          if (!localTrack?.id) return;
+          if (seenIds.has(localTrack.id)) {
+            return;
+          }
+          seenIds.add(localTrack.id);
+          playlist.tracks.push(localTrack);
+          mapLocalTracks.delete(localTrack.id);
         });
       }
       nextPlaylists.push(playlist);
