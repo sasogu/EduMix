@@ -159,6 +159,7 @@ let dropboxReadAvailableAt = 0;
 let dropboxReadInFlight = 0;
 const DROPBOX_READ_CONCURRENCY = 2;
 const remoteLinkInFlight = new Map(); // track.id -> Promise<boolean>
+const legacyDropboxPathPromises = new Map(); // track.id -> Promise<boolean>
 
 const DEFAULT_PAGE_SIZE = 10;
 
@@ -2938,8 +2939,14 @@ function reorderTracks(from, to) {
 }
 
 async function ensureTrackRemoteLink(track) {
-  if (!track.dropboxPath) {
+  if (!track) {
     return false;
+  }
+  if (!track.dropboxPath) {
+    const restored = await maybeRestoreLegacyDropboxPath(track);
+    if (!restored) {
+      return false;
+    }
   }
   const now = Date.now();
   if (track.url && track.url.startsWith('blob:')) {
@@ -4926,6 +4933,123 @@ function parseDropboxRetryInfo(status, headers, bodyText) {
     retrySeconds = 1;
   }
   return retrySeconds;
+}
+
+function sanitizeDropboxFileName(name) {
+  if (!name) {
+    return null;
+  }
+  return String(name)
+    .trim()
+    .replace(/[^a-zA-Z0-9._-]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    || null;
+}
+
+async function maybeRestoreLegacyDropboxPath(track) {
+  if (!track || track.dropboxPath || !track.id) {
+    return false;
+  }
+  if (!isDropboxConnected()) {
+    return false;
+  }
+  const now = Date.now();
+  if (track._legacyRestoreCooldown && now < track._legacyRestoreCooldown) {
+    return false;
+  }
+  if (legacyDropboxPathPromises.has(track.id)) {
+    try {
+      return await legacyDropboxPathPromises.get(track.id);
+    } finally {}
+  }
+
+  const run = (async () => {
+    const token = await ensureDropboxToken();
+    if (!token) {
+      return false;
+    }
+
+    const baseNames = [];
+    if (track.fileName) {
+      baseNames.push(track.fileName);
+    }
+    if (track.name && track.name !== track.fileName) {
+      if (track.name.includes('.')) {
+        baseNames.push(track.name);
+      } else {
+        baseNames.push(`${track.name}.mp3`);
+      }
+    }
+    baseNames.push(`${track.id}.mp3`);
+
+    const candidates = [];
+    const seen = new Set();
+    baseNames.forEach(base => {
+      const safe = sanitizeDropboxFileName(base);
+      if (!safe) {
+        return;
+      }
+      const candidate = `/tracks/${track.id}-${safe}`;
+      if (seen.has(candidate)) {
+        return;
+      }
+      seen.add(candidate);
+      candidates.push(candidate);
+    });
+
+    for (const path of candidates) {
+      try {
+        const response = await fetch('https://api.dropboxapi.com/2/files/get_metadata', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ path }),
+        });
+
+        if (response.status === 409) {
+          continue;
+        }
+        if (!response.ok) {
+          const text = await response.text().catch(() => '');
+          const retrySeconds = parseDropboxRetryInfo(response.status, response.headers, text);
+          if (retrySeconds > 0) {
+            dropboxReadAvailableAt = Date.now() + retrySeconds * 1000;
+          }
+          continue;
+        }
+
+        const meta = await response.json().catch(() => null);
+        if (!meta) {
+          continue;
+        }
+        track.dropboxPath = meta.path_lower || meta.path_display || path;
+        track.dropboxRev = meta.rev || track.dropboxRev || null;
+        track.dropboxSize = Number(meta.size) || track.dropboxSize || null;
+        track.dropboxUpdatedAt = Date.now();
+        track.isRemote = true;
+        track._legacyRestoreCooldown = 0;
+        persistLocalPlaylist();
+        updateDropboxUI();
+        return true;
+      } catch (error) {
+        try {
+          console.warn('Legacy Dropbox path restore failed', error);
+        } catch {}
+      }
+    }
+
+    track._legacyRestoreCooldown = Date.now() + 60000;
+    return false;
+  })();
+
+  legacyDropboxPathPromises.set(track.id, run);
+  try {
+    return await run;
+  } finally {
+    legacyDropboxPathPromises.delete(track.id);
+  }
 }
 
 async function uploadOneTrackWithRetry(token, track) {
