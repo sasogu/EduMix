@@ -2688,6 +2688,31 @@ function addTracks(files) {
     return;
   }
   state.tracks.push(...newTracks);
+  if (state.viewMinRating > 0) {
+    const minRatingBarrier = state.viewMinRating;
+    const newlyHidden = newTracks.some(track => (Number(track.rating) || 0) < minRatingBarrier);
+    if (newlyHidden) {
+      state.viewMinRating = 0;
+      state.viewPageIndex = 0;
+      if (minRatingSelect) {
+        minRatingSelect.value = '0';
+      }
+      const activeId = state.activePlaylistId;
+      if (activeId) {
+        viewPerList[activeId] = {
+          ...(viewPerList[activeId] || {}),
+          minRating: 0,
+          pageIndex: 0,
+          sort: state.viewSort,
+          pageSize: state.viewPageSize,
+          pageSizeExplicit: state.viewPageSize === 0,
+        };
+      }
+      try {
+        console.info('Filtro de valoración restablecido para mostrar las pistas recién añadidas.');
+      } catch {}
+    }
+  }
   const activePlaylist = getActivePlaylist();
   if (activePlaylist) {
     activePlaylist.updatedAt = Date.now();

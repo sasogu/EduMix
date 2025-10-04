@@ -1,4 +1,4 @@
-const CACHE_NAME = 'edumix-cache-v1.4.1';
+const CACHE_NAME = 'edumix-cache-v1.4.2';
 // Mantén el shell mínimo y coherente: evita duplicados y claves ambiguas
 const APP_SHELL = [
   './index.html',
