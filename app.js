@@ -194,6 +194,42 @@ let shuffleQueue = [];
 let shuffleHistory = [];
 let searchDebounce = null;
 
+// Estado para manejo de cambio de playlist durante reproducción
+let pendingPlaylistChange = null;
+
+function handlePendingPlaylistChange() {
+  if (!pendingPlaylistChange) {
+    return;
+  }
+  
+  console.log('Manejando transición de playlist pendiente a:', pendingPlaylistChange.targetId);
+  
+  // Limpiar el estado pendiente
+  const change = pendingPlaylistChange;
+  pendingPlaylistChange = null;
+  
+  // Limpiar el índice temporal del player
+  if (players.length && players[activePlayerIndex]) {
+    delete players[activePlayerIndex].pendingTrackIndex;
+  }
+  
+  // Buscar la primera pista de la nueva lista para reproducir
+  const newPlaylist = state.playlists.find(p => p.id === change.targetId);
+  if (!newPlaylist || !newPlaylist.tracks.length) {
+    // No hay pistas en la nueva lista, detener reproducción
+    stopPlayback();
+    return;
+  }
+  
+  // Reproducir la primera pista de la nueva lista
+  const startIndex = getStartIndex(); // Respeta filtros y ordenación
+  if (startIndex >= 0 && startIndex < state.tracks.length) {
+    playTrack(startIndex, { fade: false }).catch(console.error);
+  } else {
+    stopPlayback();
+  }
+}
+
 // Tema: claro/oscuro con persistencia
 function applyTheme(theme) {
   const root = document.documentElement;
@@ -654,10 +690,47 @@ function setActivePlaylist(id) {
   if (!target) {
     return;
   }
+  
+  // Si hay una pista reproduciéndose, no detenerla inmediatamente
+  const wasPlaying = state.isPlaying && state.currentIndex >= 0;
+  if (wasPlaying) {
+    // Marcar que hay un cambio de playlist pendiente
+    pendingPlaylistChange = {
+      targetId: id,
+      currentTrack: state.tracks[state.currentIndex],
+      currentIndex: state.currentIndex
+    };
+    
+    // Solo cambiar el ID activo y actualizar la UI
+    state.activePlaylistId = id;
+    syncTracksFromActivePlaylist();
+    loadActiveViewPrefs();
+    
+    // Actualizar la vista pero mantener la reproducción
+    renderPlaylist();
+    updateControls();
+    renderPlaylistPicker();
+    
+    // La pista actual ya no está en el índice correcto de la nueva lista
+    // Marcar como -1 para que la UI refleje que no hay pista seleccionada en la nueva lista
+    const previousIndex = state.currentIndex;
+    state.currentIndex = -1;
+    
+    // Pero mantener la reproducción con el índice temporal
+    if (players.length && players[activePlayerIndex]) {
+      players[activePlayerIndex].pendingTrackIndex = previousIndex;
+    }
+    
+    persistLocalPlaylist();
+    requestDropboxSync();
+    scheduleStorageStatsUpdate();
+    return;
+  }
+  
+  // Si no hay reproducción, comportamiento normal
   stopPlayback({ skipPlaylistRender: true, skipControlsUpdate: true });
   state.activePlaylistId = id;
   syncTracksFromActivePlaylist();
-  // Cargar preferencias específicas de esta lista
   loadActiveViewPrefs();
   state.currentIndex = -1;
   renderPlaylist();
@@ -2225,6 +2298,15 @@ playlistEl?.addEventListener('click', event => {
   }
   switch (button.dataset.action) {
     case 'play':
+      // Cancelar cambio de playlist pendiente si el usuario selecciona una pista manualmente
+      if (pendingPlaylistChange) {
+        console.log('Cancelando cambio de playlist pendiente - usuario seleccionó pista manualmente');
+        pendingPlaylistChange = null;
+        // Limpiar índice temporal del player
+        if (players.length && players[activePlayerIndex]) {
+          delete players[activePlayerIndex].pendingTrackIndex;
+        }
+      }
       playTrack(index).catch(console.error);
       break;
     case 'rename':
@@ -3300,24 +3382,38 @@ async function playTrack(index, options = {}) {
   scheduleAutoAdvance(nextPlayer, index);
 
   nextPlayer.audio.onended = () => {
-    if (state.currentIndex !== index) {
+    if (state.currentIndex !== index && !nextPlayer.pendingTrackIndex) {
       return;
     }
-  if (state.autoLoop && state.tracks[index]) {
-    playTrack(index, { fade: false }).catch(console.error);
-    return;
-  }
-  const nextIndex = getNextIndex();
-  if (nextIndex !== -1) {
-    playTrack(nextIndex, { fade: false }).catch(console.error);
-  } else {
-    stopPlayback();
-  }
+    
+    // Si hay cambio de playlist pendiente, manejar la transición
+    if (pendingPlaylistChange) {
+      handlePendingPlaylistChange();
+      return;
+    }
+    
+    if (state.autoLoop && state.tracks[index]) {
+      playTrack(index, { fade: false }).catch(console.error);
+      return;
+    }
+    const nextIndex = getNextIndex();
+    if (nextIndex !== -1) {
+      playTrack(nextIndex, { fade: false }).catch(console.error);
+    } else {
+      stopPlayback();
+    }
   };
 }
 
 function stopPlayback(options = {}) {
   const { skipPlaylistRender = false, skipControlsUpdate = false } = options || {};
+  
+  // Limpiar cambio de playlist pendiente
+  if (pendingPlaylistChange) {
+    console.log('Limpiando cambio de playlist pendiente en stopPlayback');
+    pendingPlaylistChange = null;
+  }
+  
   if (players.length) {
     const now = audioContext ? getAudioContext().currentTime : 0;
     players.forEach(player => {
@@ -3330,6 +3426,8 @@ function stopPlayback(options = {}) {
       }
       window.clearTimeout(player.stopTimeout);
       player.trackId = null;
+      // Limpiar índice temporal
+      delete player.pendingTrackIndex;
     });
   }
   state.currentIndex = -1;
@@ -3349,6 +3447,19 @@ function stopPlayback(options = {}) {
 }
 
 function updateNowPlaying() {
+  // Si hay cambio de playlist pendiente, mostrar la pista que está sonando
+  if (pendingPlaylistChange && players.length && players[activePlayerIndex]) {
+    const currentTrack = pendingPlaylistChange.currentTrack;
+    if (currentTrack) {
+      const displayTitle = getTrackDisplayTitle(currentTrack);
+      nowPlayingEl.textContent = `${displayTitle} (cambiando lista...)`;
+      updateCoverArtDisplay(currentTrack);
+      updateNowRatingUI(currentTrack);
+      updateMediaSessionMetadata(currentTrack);
+      return;
+    }
+  }
+  
   const track = state.tracks[state.currentIndex];
   if (!track) {
     nowPlayingEl.textContent = 'Ninguna pista seleccionada';
@@ -6448,9 +6559,9 @@ function computeNormalizationFromPeaks(peaks) {
   return Math.min(Math.max(gain, 0.25), NORMALIZATION_MAX_GAIN);
 }
 
-function updateNowRatingUI() {
+function updateNowRatingUI(trackOverride = null) {
   if (!nowRatingEl) return;
-  const track = state.tracks[state.currentIndex];
+  const track = trackOverride || state.tracks[state.currentIndex];
   if (!track) {
     nowRatingEl.hidden = true;
     return;
@@ -6462,7 +6573,7 @@ function updateNowRatingUI() {
     const val = idx + 1;
     btn.textContent = val <= rating ? '★' : '☆';
     btn.setAttribute('aria-pressed', val <= rating ? 'true' : 'false');
-    btn.disabled = false;
+    btn.disabled = !!trackOverride; // Deshabilitar si es override (no pertenece a la lista actual)
   });
 }
 
