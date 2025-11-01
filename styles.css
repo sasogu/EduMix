@@ -378,6 +378,102 @@ button.ghost:not(:disabled):hover {
   margin: 1rem 0 0.5rem;
 }
 
+/* Barra de progreso simple */
+.progress-bar-container {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin: 1rem 0;
+}
+
+.progress-bar {
+  flex: 1;
+  height: 6px;
+  background: rgba(0, 0, 0, 0.1);
+  border-radius: 3px;
+  position: relative;
+  cursor: pointer;
+  transition: height 0.2s ease;
+}
+
+.progress-bar:hover {
+  height: 8px;
+}
+
+.progress-fill {
+  height: 100%;
+  background: var(--primary);
+  border-radius: 3px;
+  width: 0%;
+  transition: width 0.1s ease;
+}
+
+.progress-handle {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  background: var(--primary);
+  border-radius: 50%;
+  top: 50%;
+  left: 0%;
+  transform: translate(-50%, -50%);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.progress-bar:hover .progress-handle,
+.progress-bar:active .progress-handle {
+  opacity: 1;
+}
+
+#toggleWaveform {
+  padding: 0.6rem;
+  min-width: auto;
+  width: 2.5rem;
+  height: 2.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.1rem;
+  border-radius: 50%;
+  transition: all 0.2s ease;
+}
+
+#toggleWaveform:hover {
+  background: rgba(74, 144, 226, 0.1);
+  transform: scale(1.05);
+}
+
+/* Controles principales reorganizados */
+.main-controls {
+  margin-top: 1rem;
+}
+
+.control-row {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
+}
+
+.control-row:last-child {
+  margin-bottom: 0;
+}
+
+.toggle-controls {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.speed-control {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
 .pager {
   margin-top: 0.6rem;
   display: flex;
@@ -759,6 +855,85 @@ footer {
   padding: 0 1rem;
 }
 
+/* Optimización para tablets horizontales (7-8 pulgadas) */
+@media (min-width: 768px) and (max-width: 1200px) and (orientation: landscape) {
+  main {
+    width: min(1100px, 95vw);
+    margin: 1.5rem auto;
+  }
+  
+  .main-controls {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+    margin-top: 1rem;
+  }
+  
+  .control-row {
+    margin-bottom: 0;
+  }
+  
+  .eq-controls {
+    gap: 0.5rem;
+  }
+  
+  .eq-label {
+    font-size: 0.9rem;
+  }
+  
+  .section-actions {
+    gap: 0.3rem;
+  }
+  
+  .section-actions select {
+    min-width: 8rem;
+    font-size: 0.9rem;
+    padding: 0.4rem 0.7rem;
+  }
+  
+  .app-header {
+    padding: 1rem clamp(1rem, 3vw, 2rem);
+  }
+  
+  .card {
+    padding: 1rem 1.25rem;
+  }
+  
+  /* Mejorar visibilidad de la barra de progreso en tablets */
+  .progress-bar {
+    height: 8px;
+  }
+  
+  .progress-bar:hover {
+    height: 10px;
+  }
+  
+  .progress-handle {
+    width: 14px;
+    height: 14px;
+  }
+  
+  /* Optimizar controles de reproducción */
+  .playback-controls {
+    margin: 1.2rem 0;
+    gap: 1.5rem;
+  }
+  
+  .playback-controls button {
+    padding: 0.8rem 1.2rem;
+    font-size: 1.1rem;
+  }
+  
+  /* Mejorar el now-playing */
+  .now-playing-row {
+    gap: 1.2rem;
+  }
+  
+  .time-display {
+    font-size: 1.3rem;
+  }
+}
+
 @media (max-width: 720px) {
   main {
     grid-template-columns: 1fr;
@@ -772,6 +947,16 @@ footer {
   .track-actions {
     grid-column: 1 / -1;
     justify-content: flex-end;
+  }
+  
+  .control-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 1rem;
+  }
+  
+  .toggle-controls {
+    justify-content: space-between;
   }
 }
 
@@ -878,6 +1063,8 @@ html[data-theme="light"] .cloud-hint { color: rgba(31, 38, 51, 0.7); }
 html[data-theme="light"] .badge { background: rgba(74, 144, 226, 0.14); color: var(--primary); }
 html[data-theme="light"] .badge.is-error { background: rgba(232, 93, 117, 0.2); color: #b91c1c; }
 html[data-theme="light"] footer { color: rgba(31, 38, 51, 0.6); }
+html[data-theme="light"] .progress-bar { background: rgba(0, 0, 0, 0.1); }
+html[data-theme="light"] #toggleWaveform:hover { background: rgba(74, 144, 226, 0.1); }
 
 :root[data-theme="dark"] {
   --bg: #0f172a;
@@ -918,3 +1105,5 @@ html[data-theme="dark"] .cloud-hint { color: rgba(226, 232, 240, 0.7); }
 html[data-theme="dark"] .badge { background: rgba(74, 144, 226, 0.2); color: #dbeafe; }
 html[data-theme="dark"] .badge.is-error { background: rgba(248, 113, 113, 0.25); color: #fecaca; }
 html[data-theme="dark"] footer { color: rgba(248, 250, 252, 0.6); }
+html[data-theme="dark"] .progress-bar { background: rgba(255, 255, 255, 0.1); }
+html[data-theme="dark"] #toggleWaveform:hover { background: rgba(74, 144, 226, 0.2); }

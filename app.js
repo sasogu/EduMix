@@ -47,6 +47,10 @@ const cloudSyncCard = document.querySelector('.cloud-sync');
 const waveformCanvas = document.getElementById('waveformCanvas');
 const waveformMessage = document.getElementById('waveformMessage');
 const waveformContainer = document.querySelector('.waveform');
+const progressBar = document.getElementById('progressBar');
+const progressFill = document.getElementById('progressFill');
+const progressHandle = document.getElementById('progressHandle');
+const toggleWaveformBtn = document.getElementById('toggleWaveform');
 const coverArtImg = document.getElementById('coverArt');
 const nowRatingEl = document.getElementById('nowRating');
 const nowPlayingSectionEl = document.getElementById('nowPlayingSection');
@@ -850,6 +854,9 @@ function serializeTrackLocal(track) {
 }
 
 function deserializeTrack(entry) {
+  const normalizedFavorite = coerceDropboxBoolean(entry?.isFavorite);
+  const normalizedRating = coerceDropboxNumber(entry?.rating);
+  const normalizedGain = coerceDropboxNumber(entry?.normalizationGain);
   return {
     id: entry.id,
     name: entry.name,
@@ -857,12 +864,12 @@ function deserializeTrack(entry) {
     fileName: entry.fileName ?? entry.name,
     artist: entry.artist || '',
     album: entry.album || '',
-    isFavorite: !!entry.isFavorite,
+    isFavorite: normalizedFavorite !== null ? normalizedFavorite : false,
     url: null,
     duration: entry.duration ?? null,
     updatedAt: entry.updatedAt ?? null,
-    rating: Number.isFinite(entry.rating) ? entry.rating : 0,
-    normalizationGain: Number.isFinite(entry.normalizationGain) ? entry.normalizationGain : null,
+    rating: normalizedRating !== null ? normalizedRating : 0,
+    normalizationGain: normalizedGain !== null ? normalizedGain : null,
     size: entry.size ?? null,
     lastModified: entry.lastModified ?? null,
     dropboxPath: entry.dropboxPath ?? null,
@@ -1110,20 +1117,30 @@ function handleWaveformMetadata(player) {
 }
 
 function handleWaveformProgress(player) {
-  if (!waveformCanvas || waveformState.trackId !== player.trackId) {
-    return;
-  }
-  const duration = waveformState.duration || player.audio.duration;
+  const duration = player.audio.duration;
   if (!Number.isFinite(duration) || duration <= 0) {
     return;
   }
+  
   const progress = Math.min(1, Math.max(0, player.audio.currentTime / duration));
-  if (Math.abs(progress - waveformState.progress) >= 0.003) {
-    waveformState.progress = progress;
-    if (waveformState.peaks && waveformState.peaks.length) {
-      drawWaveform(waveformState.peaks, waveformState.progress);
+  
+  // Actualizar barra de progreso simple
+  if (progressFill && progressHandle) {
+    const percentage = progress * 100;
+    progressFill.style.width = `${percentage}%`;
+    progressHandle.style.left = `${percentage}%`;
+  }
+  
+  // Actualizar forma de onda solo si está visible y corresponde a la pista actual
+  if (!waveformContainer.hidden && waveformCanvas && waveformState.trackId === player.trackId) {
+    if (Math.abs(progress - waveformState.progress) >= 0.003) {
+      waveformState.progress = progress;
+      if (waveformState.peaks && waveformState.peaks.length) {
+        drawWaveform(waveformState.peaks, waveformState.progress);
+      }
     }
   }
+  
   // Prefetch del siguiente cuando llega al 50% de la pista
   if (player.trackId && lastPrefetchForTrackId !== player.trackId && progress >= 0.5) {
     lastPrefetchForTrackId = player.trackId;
@@ -1280,6 +1297,12 @@ function maybePrefetchNext() {
 }
 
 function setWaveformTrack(track) {
+  // Resetear barra de progreso simple
+  if (progressFill && progressHandle) {
+    progressFill.style.width = '0%';
+    progressHandle.style.left = '0%';
+  }
+  
   if (!waveformCanvas || !waveformContainer) {
     return;
   }
@@ -1320,13 +1343,15 @@ function setWaveformTrack(track) {
     drawWaveform(waveformState.peaks, waveformState.progress);
   } else {
     waveformState.peaks = null;
-    // Ya no se difiere la descarga de forma de onda por política de reproducción
-    waveformContainer.classList.add('is-loading');
-    if (waveformMessage) {
-      waveformMessage.textContent = 'Generando forma de onda…';
-    }
-    drawWaveform(null, 0);
-    ensureWaveform(track)
+    
+    // Solo generar forma de onda si está visible
+    if (!waveformContainer.hidden) {
+      waveformContainer.classList.add('is-loading');
+      if (waveformMessage) {
+        waveformMessage.textContent = 'Generando forma de onda…';
+      }
+      drawWaveform(null, 0);
+      ensureWaveform(track)
       .then(result => {
         if (!result || waveformState.trackId !== track.id) {
           return;
@@ -1358,6 +1383,7 @@ function setWaveformTrack(track) {
           }
         }
       });
+    }
   }
 }
 
@@ -1393,6 +1419,13 @@ function scheduleWaveformResize() {
       drawWaveform(null, 0);
     }
   });
+}
+
+function scheduleWaveformGeneration(track) {
+  // Solo generar la forma de onda si está visible
+  if (!waveformContainer.hidden && track) {
+    ensureWaveform(track).catch(console.error);
+  }
 }
 
 function acquireWaveformSlot() {
@@ -1844,6 +1877,40 @@ async function ensureContextRunning() {
 }
 
 window.addEventListener('resize', scheduleWaveformResize);
+
+// Event listeners para la nueva barra de progreso
+progressBar?.addEventListener('click', (event) => {
+  const player = players[activePlayerIndex];
+  if (!player?.audio?.duration) return;
+  
+  const rect = progressBar.getBoundingClientRect();
+  const clickX = event.clientX - rect.left;
+  const percentage = clickX / rect.width;
+  const newTime = percentage * player.audio.duration;
+  
+  player.audio.currentTime = Math.max(0, Math.min(newTime, player.audio.duration));
+});
+
+// Event listener para mostrar/ocultar forma de onda
+toggleWaveformBtn?.addEventListener('click', () => {
+  const isHidden = waveformContainer.hidden;
+  waveformContainer.hidden = !isHidden;
+  
+  if (!isHidden) {
+    // Ocultar forma de onda
+    toggleWaveformBtn.title = 'Mostrar forma de onda';
+    toggleWaveformBtn.textContent = '📊';
+  } else {
+    // Mostrar forma de onda
+    toggleWaveformBtn.title = 'Ocultar forma de onda';
+    toggleWaveformBtn.textContent = '📈';
+    // Si hay una pista actual, generar la forma de onda
+    const currentTrack = state.tracks[state.currentIndex];
+    if (currentTrack) {
+      ensureWaveform(currentTrack).catch(console.error);
+    }
+  }
+});
 
 filePicker?.addEventListener('change', event => {
   const files = Array.from(event.target.files || []);
@@ -2719,7 +2786,7 @@ function addTracks(files) {
     activePlaylist.updatedAt = Date.now();
   }
   newTracks.forEach(track => {
-    ensureWaveform(track).catch(console.error);
+    scheduleWaveformGeneration(track);
     ensureCoverArt(track)
       .then(changed => { if (changed) updateTrackThumbnails(track); })
       .catch(() => {})
@@ -4946,6 +5013,51 @@ function sanitizeDropboxFileName(name) {
     || null;
 }
 
+function coerceDropboxBoolean(value) {
+  if (typeof value === 'boolean') {
+    return value;
+  }
+  if (typeof value === 'number') {
+    if (value === 1) return true;
+    if (value === 0) return false;
+  }
+  if (value === '1') {
+    return true;
+  }
+  if (value === '0') {
+    return false;
+  }
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === 'true') {
+      return true;
+    }
+    if (normalized === 'false') {
+      return false;
+    }
+    if (normalized === '1' || normalized === 'yes' || normalized === 'y' || normalized === 'on') {
+      return true;
+    }
+    if (normalized === '0' || normalized === 'no' || normalized === 'n' || normalized === 'off') {
+      return false;
+    }
+  }
+  return null;
+}
+
+function coerceDropboxNumber(value) {
+  if (Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === 'string' && value.trim().length) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return null;
+}
+
 async function maybeRestoreLegacyDropboxPath(track) {
   if (!track || track.dropboxPath || !track.id) {
     return false;
@@ -5489,21 +5601,28 @@ async function pullDropboxPlaylist(token) {
                   track.album = remoteAlbum;
                 }
               }
-              if (typeof entry.isFavorite === 'boolean') {
+              const remoteFavorite = coerceDropboxBoolean(entry.isFavorite);
+              if (remoteFavorite !== null) {
                 const remoteTs = Number(entry.updatedAt || 0);
                 const localTs = Number(track.updatedAt || 0);
                 if (remoteTs >= localTs || typeof track.isFavorite !== 'boolean') {
-                  track.isFavorite = entry.isFavorite;
+                  track.isFavorite = remoteFavorite;
                 }
               }
               if (Number.isFinite(entry.duration)) {
                 track.duration = entry.duration;
               }
-              if (Number.isFinite(entry.normalizationGain)) {
-                track.normalizationGain = entry.normalizationGain;
+              const remoteNormGain = coerceDropboxNumber(entry.normalizationGain);
+              if (remoteNormGain !== null) {
+                track.normalizationGain = remoteNormGain;
               }
-              if (Number.isFinite(entry.rating)) {
-                track.rating = entry.rating;
+              const remoteRating = coerceDropboxNumber(entry.rating);
+              if (remoteRating !== null) {
+                const remoteTs = Number(entry.updatedAt || 0);
+                const localTs = Number(track.updatedAt || 0);
+                if (remoteTs >= localTs || !Number.isFinite(track.rating)) {
+                  track.rating = remoteRating;
+                }
               }
             } else {
               track = deserializeTrack(entry);
@@ -5650,11 +5769,13 @@ async function pullDropboxPlaylist(token) {
         if (!existing.duration && entry.duration) {
           existing.duration = entry.duration;
         }
-        if (Number.isFinite(entry.normalizationGain)) {
-          existing.normalizationGain = entry.normalizationGain;
+        const remoteNormGain = coerceDropboxNumber(entry.normalizationGain);
+        if (remoteNormGain !== null) {
+          existing.normalizationGain = remoteNormGain;
         }
-        if (Number.isFinite(entry.rating)) {
-          existing.rating = entry.rating;
+        const remoteRating = coerceDropboxNumber(entry.rating);
+        if (remoteRating !== null) {
+          existing.rating = remoteRating;
         }
         if (entry.waveform?.peaks?.length) {
           existing.waveform = entry.waveform;
@@ -5757,8 +5878,9 @@ function applyRemoteDocumentToState(json) {
           if (remoteAlbum) {
             track.album = remoteAlbum;
           }
-          if (typeof entry.isFavorite === 'boolean') {
-            track.isFavorite = entry.isFavorite;
+          const remoteFavorite = coerceDropboxBoolean(entry.isFavorite);
+          if (remoteFavorite !== null) {
+            track.isFavorite = remoteFavorite;
           }
           if (Number.isFinite(entry.duration)) track.duration = entry.duration;
           if (entry.dropboxPath) {
@@ -6829,12 +6951,25 @@ async function pullDropboxPlaylistsPerList(token) {
           if (remoteAlbum2) {
             track.album = remoteAlbum2;
           }
-          if (typeof entry.isFavorite === 'boolean') {
-            track.isFavorite = entry.isFavorite;
+          const remoteFavorite2 = coerceDropboxBoolean(entry.isFavorite);
+          if (remoteFavorite2 !== null) {
+            const remoteTs2 = Number(entry.updatedAt || 0);
+            const localTs2 = Number(track.updatedAt || 0);
+            if (remoteTs2 >= localTs2 || typeof track.isFavorite !== 'boolean') {
+              track.isFavorite = remoteFavorite2;
+            }
           }
           if (Number.isFinite(entry.duration)) track.duration = entry.duration;
-          if (Number.isFinite(entry.normalizationGain)) track.normalizationGain = entry.normalizationGain;
-          if (Number.isFinite(entry.rating)) track.rating = entry.rating;
+          const remoteNormGain2 = coerceDropboxNumber(entry.normalizationGain);
+          if (remoteNormGain2 !== null) track.normalizationGain = remoteNormGain2;
+          const remoteRating2 = coerceDropboxNumber(entry.rating);
+          if (remoteRating2 !== null) {
+            const remoteTs2 = Number(entry.updatedAt || 0);
+            const localTs2 = Number(track.updatedAt || 0);
+            if (remoteTs2 >= localTs2 || !Number.isFinite(track.rating)) {
+              track.rating = remoteRating2;
+            }
+          }
           if (entry.dropboxPath) {
             track.dropboxPath = entry.dropboxPath;
             track.dropboxRev = entry.dropboxRev ?? track.dropboxRev ?? null;
