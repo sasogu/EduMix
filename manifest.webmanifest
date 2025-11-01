@@ -4,18 +4,22 @@
   "description": "Organiza, reproduce y mezcla tus audios con fundidos suaves desde el navegador.",
   "start_url": "./",
   "display": "standalone",
+  "orientation": "any",
   "background_color": "#4a90e2",
   "theme_color": "#4a90e2",
+  "categories": ["music", "entertainment", "multimedia"],
   "icons": [
     {
       "src": "icons/icon-192.png",
       "sizes": "192x192",
-      "type": "image/png"
+      "type": "image/png",
+      "purpose": "any maskable"
     },
     {
       "src": "icons/icon-512.png",
-      "sizes": "512x512",
-      "type": "image/png"
+      "sizes": "512x512", 
+      "type": "image/png",
+      "purpose": "any maskable"
     }
   ]
 }

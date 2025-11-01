@@ -6672,14 +6672,52 @@ function setupMediaSession() {
   if (!hasMediaSession() || mediaSessionSetup) return;
   mediaSessionSetup = true;
   const ms = navigator.mediaSession;
+  
+  console.log('🎵 Configurando Media Session para controles en segundo plano');
+  
+  // Controles básicos
   try { ms.setActionHandler('play', () => handleMediaPlay()); } catch {}
   try { ms.setActionHandler('pause', () => handleMediaPause()); } catch {}
   try { ms.setActionHandler('stop', () => stopPlayback()); } catch {}
-  try { ms.setActionHandler('previoustrack', () => { const i = getPrevIndex(); if (i !== -1) playTrack(i).catch(console.error); }); } catch {}
-  try { ms.setActionHandler('nexttrack', () => { const i = getNextIndex(); if (i !== -1) playTrack(i).catch(console.error); }); } catch {}
-  try { ms.setActionHandler('seekbackward', (details) => seekRelative(-(details?.seekOffset || 10))); } catch {}
-  try { ms.setActionHandler('seekforward', (details) => seekRelative(+(details?.seekOffset || 10))); } catch {}
-  try { ms.setActionHandler('seekto', (details) => seekTo(details?.seekTime)); } catch {}
+  
+  // Navegación de pistas
+  try { 
+    ms.setActionHandler('previoustrack', () => { 
+      console.log('🎵 Media Session: Pista anterior');
+      const i = getPrevIndex(); 
+      if (i !== -1) playTrack(i).catch(console.error); 
+    }); 
+  } catch {}
+  try { 
+    ms.setActionHandler('nexttrack', () => { 
+      console.log('🎵 Media Session: Siguiente pista');
+      const i = getNextIndex(); 
+      if (i !== -1) playTrack(i).catch(console.error); 
+    }); 
+  } catch {}
+  
+  // Controles de búsqueda (seeking)
+  try { ms.setActionHandler('seekbackward', (details) => {
+    console.log('🎵 Media Session: Retroceder', details?.seekOffset || 10, 's');
+    seekRelative(-(details?.seekOffset || 10));
+  }); } catch {}
+  try { ms.setActionHandler('seekforward', (details) => {
+    console.log('🎵 Media Session: Avanzar', details?.seekOffset || 10, 's');
+    seekRelative(+(details?.seekOffset || 10));
+  }); } catch {}
+  try { ms.setActionHandler('seekto', (details) => {
+    console.log('🎵 Media Session: Buscar a', details?.seekTime, 's');
+    seekTo(details?.seekTime);
+  }); } catch {}
+  
+  // Controles adicionales para mejor experiencia en tablet
+  try { 
+    ms.setActionHandler('skipad', () => {
+      console.log('🎵 Media Session: Saltar anuncio (próxima pista)');
+      const i = getNextIndex(); 
+      if (i !== -1) playTrack(i).catch(console.error);
+    }); 
+  } catch {}
 }
 
 function handleMediaPlay() {
@@ -6736,25 +6774,43 @@ function updateMediaSessionMetadata(track) {
   if (!hasMediaSession()) return;
   const t = track || state.tracks[state.currentIndex] || null;
   if (!t) {
-    try { navigator.mediaSession.metadata = null; } catch {}
+    try { 
+      navigator.mediaSession.metadata = null; 
+      console.log('🎵 Media Session: Metadatos limpiados');
+    } catch {}
     return;
   }
+  
+  // Preparar artwork con múltiples tamaños para mejor compatibilidad
   const artwork = [];
-  if (t.coverUrl) artwork.push({ src: t.coverUrl, sizes: '512x512', type: 'image/png' });
-  artwork.push({ src: 'icons/icon-192.png', sizes: '192x192', type: 'image/png' });
+  if (t.coverUrl) {
+    artwork.push({ src: t.coverUrl, sizes: '512x512', type: 'image/png' });
+    artwork.push({ src: t.coverUrl, sizes: '256x256', type: 'image/png' });
+  }
+  // Fallback a iconos de la app con múltiples tamaños
   artwork.push({ src: 'icons/icon-512.png', sizes: '512x512', type: 'image/png' });
+  artwork.push({ src: 'icons/icon-192.png', sizes: '192x192', type: 'image/png' });
+  artwork.push({ src: 'icons/icon-192.png', sizes: '96x96', type: 'image/png' });
+  
+  const trackTitle = getCleanTrackName(t) || 'Pista';
+  const trackArtist = getTrackArtist(t) || 'Artista Desconocido';
+  const trackAlbum = (() => {
+    if (!t.album) return 'EduMix';
+    try { return applySpanishHeuristics(repairMojibake(String(t.album))).trim() || 'EduMix'; }
+    catch { return String(t.album) || 'EduMix'; }
+  })();
+  
   try {
     navigator.mediaSession.metadata = new MediaMetadata({
-      title: getCleanTrackName(t) || 'Pista',
-      artist: getTrackArtist(t) || '',
-      album: (() => {
-        if (!t.album) return 'EduMix';
-        try { return applySpanishHeuristics(repairMojibake(String(t.album))).trim() || 'EduMix'; }
-        catch { return String(t.album) || 'EduMix'; }
-      })(),
+      title: trackTitle,
+      artist: trackArtist,
+      album: trackAlbum,
       artwork,
     });
-  } catch {}
+    console.log('🎵 Media Session: Metadatos actualizados -', trackTitle, 'por', trackArtist);
+  } catch (error) {
+    console.warn('Error actualizando metadatos Media Session:', error);
+  }
 }
 
 function updateMediaSessionPlaybackState() {
@@ -6772,15 +6828,22 @@ function updateMediaSessionPosition(player) {
   if (!hasMediaSession() || typeof navigator.mediaSession.setPositionState !== 'function') return;
   const p = player || players[activePlayerIndex];
   if (!p || !p.audio) return;
+  
   const duration = Number.isFinite(p.audio.duration) ? p.audio.duration : 0;
-  if (!duration) return;
+  const position = Math.max(0, Number(p.audio.currentTime) || 0);
+  const playbackRate = Number(state.playbackRate) || 1;
+  
+  if (!duration || position > duration) return;
+  
   try {
     navigator.mediaSession.setPositionState({
-      duration,
-      playbackRate: Number(state.playbackRate) || 1,
-      position: Math.max(0, Number(p.audio.currentTime) || 0),
+      duration: duration,
+      playbackRate: playbackRate,
+      position: position,
     });
-  } catch {}
+  } catch (error) {
+    console.warn('Error actualizando posición Media Session:', error);
+  }
 }
 
 function updateSpeedUI() {
