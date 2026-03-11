@@ -18,6 +18,10 @@ body {
   flex-direction: column;
 }
 
+body.dialog-open {
+  overflow: hidden;
+}
+
 .sw-update-notice {
   position: fixed;
   right: 1rem;
@@ -36,6 +40,60 @@ body {
 
 .sw-update-notice button {
   box-shadow: none;
+}
+
+.app-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  background: rgba(15, 20, 31, 0.6);
+  backdrop-filter: blur(6px);
+}
+
+.app-dialog {
+  width: min(32rem, 100%);
+  display: grid;
+  gap: 1rem;
+  padding: 1.25rem;
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  background: var(--card);
+  color: var(--text);
+  box-shadow: var(--shadow);
+}
+
+.app-dialog h2 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.app-dialog p {
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.app-dialog input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid var(--border);
+  border-radius: 0.8rem;
+  background: rgba(255, 255, 255, 0.92);
+  color: inherit;
+  font: inherit;
+}
+
+.app-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.75rem;
+}
+
+.app-dialog-actions .danger {
+  background: #d14d63;
 }
 
 .header-actions {

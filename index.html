@@ -211,5 +211,16 @@
   <div id="coverLightbox" class="lightbox" hidden>
     <img id="coverLightboxImg" alt="Carátula ampliada" />
   </div>
+  <div id="appDialog" class="app-dialog-backdrop" hidden>
+    <div class="app-dialog" role="dialog" aria-modal="true" aria-labelledby="appDialogTitle" aria-describedby="appDialogMessage">
+      <h2 id="appDialogTitle">Mensaje</h2>
+      <p id="appDialogMessage"></p>
+      <input id="appDialogInput" type="text" hidden />
+      <div class="app-dialog-actions">
+        <button id="appDialogCancel" type="button" class="ghost">Cancelar</button>
+        <button id="appDialogConfirm" type="button">Aceptar</button>
+      </div>
+    </div>
+  </div>
 </body>
 </html>

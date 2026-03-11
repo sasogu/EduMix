@@ -57,6 +57,12 @@ const nowPlayingSectionEl = document.getElementById('nowPlayingSection');
 const nowPlayingRowEl = document.querySelector('.now-playing-row');
 const coverLightboxEl = document.getElementById('coverLightbox');
 const coverLightboxImg = document.getElementById('coverLightboxImg');
+const appDialogEl = document.getElementById('appDialog');
+const appDialogTitleEl = document.getElementById('appDialogTitle');
+const appDialogMessageEl = document.getElementById('appDialogMessage');
+const appDialogInputEl = document.getElementById('appDialogInput');
+const appDialogCancelBtn = document.getElementById('appDialogCancel');
+const appDialogConfirmBtn = document.getElementById('appDialogConfirm');
 const pagerEl = document.getElementById('playlistPager');
 const pagerPrevBtn = document.getElementById('pagerPrev');
 const pagerNextBtn = document.getElementById('pagerNext');
@@ -230,6 +236,85 @@ function handlePendingPlaylistChange() {
   }
 }
 
+function closeAppDialog(result) {
+  if (!appDialogEl || !appDialogResolver) return;
+  const resolve = appDialogResolver;
+  appDialogResolver = null;
+  appDialogEl.hidden = true;
+  document.body.classList.remove('dialog-open');
+  if (appDialogInputEl) {
+    appDialogInputEl.hidden = true;
+    appDialogInputEl.value = '';
+  }
+  const focusTarget = appDialogLastFocusedEl;
+  appDialogLastFocusedEl = null;
+  try { focusTarget?.focus?.(); } catch {}
+  resolve(result);
+}
+
+function openAppDialog(options = {}) {
+  const {
+    title = 'Mensaje',
+    message = '',
+    confirmText = 'Aceptar',
+    cancelText = 'Cancelar',
+    kind = 'alert',
+    defaultValue = '',
+    inputType = 'text',
+    danger = false,
+  } = options || {};
+
+  if (!appDialogEl || !appDialogTitleEl || !appDialogMessageEl || !appDialogConfirmBtn || !appDialogCancelBtn || !appDialogInputEl) {
+    if (kind === 'confirm') return Promise.resolve(window.confirm(message));
+    if (kind === 'prompt') return Promise.resolve(window.prompt(message, defaultValue));
+    window.alert(message);
+    return Promise.resolve(undefined);
+  }
+
+  if (appDialogResolver) {
+    closeAppDialog(kind === 'confirm' ? false : null);
+  }
+
+  appDialogLastFocusedEl = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  appDialogTitleEl.textContent = title;
+  appDialogMessageEl.textContent = message;
+  appDialogConfirmBtn.textContent = confirmText;
+  appDialogCancelBtn.textContent = cancelText;
+  appDialogCancelBtn.hidden = kind === 'alert';
+  appDialogConfirmBtn.classList.toggle('danger', !!danger);
+  appDialogInputEl.hidden = kind !== 'prompt';
+  appDialogInputEl.type = inputType;
+  appDialogInputEl.value = defaultValue ?? '';
+  appDialogEl.hidden = false;
+  document.body.classList.add('dialog-open');
+
+  return new Promise(resolve => {
+    appDialogResolver = resolve;
+    setTimeout(() => {
+      try {
+        if (kind === 'prompt') {
+          appDialogInputEl.focus();
+          appDialogInputEl.select();
+        } else {
+          appDialogConfirmBtn.focus();
+        }
+      } catch {}
+    }, 0);
+  });
+}
+
+function showAppAlert(message, options = {}) {
+  return openAppDialog({ ...options, message, kind: 'alert' });
+}
+
+function showAppConfirm(message, options = {}) {
+  return openAppDialog({ ...options, message, kind: 'confirm' });
+}
+
+function showAppPrompt(message, options = {}) {
+  return openAppDialog({ ...options, message, kind: 'prompt' });
+}
+
 // Tema: claro/oscuro con persistencia
 function applyTheme(theme) {
   const root = document.documentElement;
@@ -356,6 +441,8 @@ const players = [];
 let activePlayerIndex = 0;
 let dragIndex = null;
 let deferredPrompt = null;
+let appDialogResolver = null;
+let appDialogLastFocusedEl = null;
 
 const pendingUploads = new Map();
 let pendingDeletions = new Set();
@@ -763,14 +850,18 @@ function createPlaylist(name) {
   requestDropboxSync();
 }
 
-function renameActivePlaylist() {
+async function renameActivePlaylist() {
   const active = getActivePlaylist();
   if (!active) return;
   if (active.isAuto) {
-    window.alert('No puedes renombrar la lista automática de favoritas.');
+    await showAppAlert('No puedes renombrar la lista automática de favoritas.', { title: 'Accion no disponible' });
     return;
   }
-  const proposed = prompt('Nuevo nombre de la lista', active.name || '');
+  const proposed = await showAppPrompt('Escribe el nuevo nombre de la lista.', {
+    title: 'Renombrar lista',
+    defaultValue: active.name || '',
+    confirmText: 'Guardar',
+  });
   if (proposed === null) return;
   const nextName = proposed.trim();
   if (!nextName || nextName === active.name) return;
@@ -786,14 +877,18 @@ function renameActivePlaylist() {
   }
 }
 
-function deleteActivePlaylist() {
+async function deleteActivePlaylist() {
   const active = getActivePlaylist();
   if (!active) return;
   if (active.isAuto) {
-    window.alert('La lista automática de favoritas no se puede eliminar.');
+    await showAppAlert('La lista automática de favoritas no se puede eliminar.', { title: 'Accion no disponible' });
     return;
   }
-  const confirmed = window.confirm(`¿Eliminar la lista "${active.name}"? Se eliminarán sus pistas de esta sesión.`);
+  const confirmed = await showAppConfirm(`¿Eliminar la lista "${active.name}"? Se eliminarán sus pistas de esta sesión.`, {
+    title: 'Eliminar lista',
+    confirmText: 'Eliminar',
+    danger: true,
+  });
   if (!confirmed) return;
   // Solo elimina recursos si esta playlist era su última referencia manual.
   cleanupPlaylistTrackResources(active.tracks, active.id);
@@ -2031,6 +2126,43 @@ toggleWaveformBtn?.addEventListener('click', () => {
   }
 });
 
+appDialogConfirmBtn?.addEventListener('click', () => {
+  if (!appDialogResolver) return;
+  if (!appDialogInputEl?.hidden) {
+    closeAppDialog(appDialogInputEl.value);
+    return;
+  }
+  closeAppDialog(true);
+});
+
+appDialogCancelBtn?.addEventListener('click', () => {
+  if (!appDialogResolver) return;
+  closeAppDialog(false);
+});
+
+appDialogEl?.addEventListener('click', (event) => {
+  if (event.target === appDialogEl && appDialogResolver) {
+    closeAppDialog(false);
+  }
+});
+
+window.addEventListener('keydown', (event) => {
+  if (!appDialogResolver || appDialogEl?.hidden) return;
+  if (event.key === 'Escape') {
+    event.preventDefault();
+    closeAppDialog(false);
+    return;
+  }
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    if (!appDialogInputEl?.hidden) {
+      closeAppDialog(appDialogInputEl.value);
+    } else {
+      closeAppDialog(true);
+    }
+  }
+});
+
 filePicker?.addEventListener('change', event => {
   const files = Array.from(event.target.files || []);
   if (!files.length) {
@@ -2049,15 +2181,21 @@ filePickerFiles?.addEventListener('change', event => {
   scheduleStorageStatsUpdate();
 });
 
-clearPlaylistBtn?.addEventListener('click', () => {
+clearPlaylistBtn?.addEventListener('click', async () => {
   const active = getActivePlaylist();
   if (active?.isAuto) {
-    window.alert('La lista automática de favoritas se gestiona sola. Desmarca corazones para quitar canciones.');
+    await showAppAlert('La lista automática de favoritas se gestiona sola. Desmarca corazones para quitar canciones.', {
+      title: 'Accion no disponible',
+    });
     return;
   }
   const count = state.tracks.length;
   const noun = count === 1 ? 'pista' : 'pistas';
-  const confirmed = window.confirm(`¿Limpiar la lista actual? Se eliminarán ${count} ${noun} de esta sesión.`);
+  const confirmed = await showAppConfirm(`¿Limpiar la lista actual? Se eliminarán ${count} ${noun} de esta sesión.`, {
+    title: 'Vaciar lista',
+    confirmText: 'Vaciar',
+    danger: true,
+  });
   if (!confirmed) {
     return;
   }
@@ -2082,9 +2220,13 @@ playlistPicker?.addEventListener('change', event => {
   setActivePlaylist(nextId);
 });
 
-newPlaylistBtn?.addEventListener('click', () => {
+newPlaylistBtn?.addEventListener('click', async () => {
   const suggestion = `Lista ${state.playlists.length + 1}`;
-  const name = prompt('Nombre de la nueva lista', suggestion);
+  const name = await showAppPrompt('Introduce el nombre de la nueva lista.', {
+    title: 'Nueva lista',
+    defaultValue: suggestion,
+    confirmText: 'Crear',
+  });
   if (name === null) {
     return;
   }
@@ -2096,11 +2238,11 @@ newPlaylistBtn?.addEventListener('click', () => {
 });
 
 renamePlaylistBtn?.addEventListener('click', () => {
-  renameActivePlaylist();
+  renameActivePlaylist().catch(console.error);
 });
 
 deletePlaylistBtn?.addEventListener('click', () => {
-  deleteActivePlaylist();
+  deleteActivePlaylist().catch(console.error);
 });
 
 shuffleToggleBtn?.addEventListener('click', () => {
@@ -2341,13 +2483,13 @@ playlistEl?.addEventListener('click', event => {
       playTrack(index).catch(console.error);
       break;
     case 'rename':
-      renameTrack(index);
+      renameTrack(index).catch(console.error);
       break;
     case 'copy':
-      copyTrackToPlaylist(index);
+      copyTrackToPlaylist(index).catch(console.error);
       break;
     case 'remove':
-      removeTrack(index);
+      removeTrack(index).catch(console.error);
       break;
     case 'rate':
       setTrackRating(index, Number(button.dataset.value) || 0);
@@ -2700,7 +2842,11 @@ preferLocalSourceToggle?.addEventListener('change', () => {
 
 clearLocalCopiesBtn?.addEventListener('click', async () => {
   const count = getAllTracks().length;
-  const ok = window.confirm(`¿Borrar copias locales de ${count} pista${count!==1?'s':''}? No se elimina la lista.`);
+  const ok = await showAppConfirm(`¿Borrar copias locales de ${count} pista${count!==1?'s':''}? No se elimina la lista.`, {
+    title: 'Borrar copias locales',
+    confirmText: 'Borrar',
+    danger: true,
+  });
   if (!ok) return;
   const tracks = getAllTracks();
   for (const track of tracks) {
@@ -2936,7 +3082,7 @@ function readDuration(track) {
   }, { once: true });
 }
 
-function copyTrackToPlaylist(index) {
+async function copyTrackToPlaylist(index) {
   const track = state.tracks[index];
   if (!track) {
     return;
@@ -2948,7 +3094,9 @@ function copyTrackToPlaylist(index) {
     return true;
   });
   if (!manualTargets.length) {
-    window.alert('No hay ninguna otra lista manual disponible. Crea una para poder copiar pistas.');
+    await showAppAlert('No hay ninguna otra lista manual disponible. Crea una para poder copiar pistas.', {
+      title: 'Sin destinos disponibles',
+    });
     return;
   }
   const options = manualTargets.map((playlist, idx) => {
@@ -2957,22 +3105,29 @@ function copyTrackToPlaylist(index) {
   });
   const firstAvailable = manualTargets.findIndex(playlist => !trackExistsInPlaylist(playlist, track.id));
   if (firstAvailable === -1) {
-    window.alert('La pista ya forma parte de todas tus listas manuales.');
+    await showAppAlert('La pista ya forma parte de todas tus listas manuales.', {
+      title: 'Sin destinos disponibles',
+    });
     return;
   }
   const message = `Selecciona la lista destino para "${getTrackDisplayTitle(track) || track.name || track.fileName || 'Pista'}":\n\n${options.join('\n')}\n\nIntroduce el número de la lista destino.`;
-  const input = prompt(message, String(firstAvailable + 1));
+  const input = await showAppPrompt(message, {
+    title: 'Copiar pista',
+    defaultValue: String(firstAvailable + 1),
+    confirmText: 'Copiar',
+    inputType: 'number',
+  });
   if (input === null) {
     return;
   }
   const choice = Number.parseInt(String(input).trim(), 10);
   if (!Number.isFinite(choice) || choice < 1 || choice > manualTargets.length) {
-    window.alert('Selección no válida. Intenta de nuevo.');
+    await showAppAlert('Selección no válida. Intenta de nuevo.', { title: 'Destino no valido' });
     return;
   }
   const target = manualTargets[choice - 1];
   if (trackExistsInPlaylist(target, track.id)) {
-    window.alert(`"${target.name}" ya tiene esta pista.`);
+    await showAppAlert(`"${target.name}" ya tiene esta pista.`, { title: 'Pista duplicada' });
     return;
   }
   target.tracks.push(track);
@@ -2984,21 +3139,25 @@ function copyTrackToPlaylist(index) {
     renderPlaylist();
     updateControls();
   }
-  window.alert(`Pista añadida a "${target.name}".`);
+  await showAppAlert(`Pista añadida a "${target.name}".`, { title: 'Pista copiada' });
 }
 
-function removeTrack(index) {
+async function removeTrack(index) {
   const track = state.tracks[index];
   if (!track) {
     return;
   }
   const active = getActivePlaylist();
   if (active?.isAuto) {
-    window.alert('Para quitar una pista de Favoritas, desmarca el corazón.');
+    await showAppAlert('Para quitar una pista de Favoritas, desmarca el corazón.', { title: 'Accion no disponible' });
     return;
   }
   const displayName = track.name || track.fileName || 'esta pista';
-  const confirmed = window.confirm(`¿Eliminar "${displayName}" de la lista?`);
+  const confirmed = await showAppConfirm(`¿Eliminar "${displayName}" de la lista?`, {
+    title: 'Eliminar pista',
+    confirmText: 'Eliminar',
+    danger: true,
+  });
   if (!confirmed) {
     return;
   }
@@ -3039,17 +3198,23 @@ function removeTrack(index) {
   scheduleStorageStatsUpdate();
 }
 
-function renameTrack(index) {
+async function renameTrack(index) {
   const track = state.tracks[index];
   if (!track) {
     return;
   }
   const active = getActivePlaylist();
   if (active?.isAuto) {
-    window.alert('No puedes renombrar pistas desde la lista automática. Ve a la lista original.');
+    await showAppAlert('No puedes renombrar pistas desde la lista automática. Ve a la lista original.', {
+      title: 'Accion no disponible',
+    });
     return;
   }
-  const proposed = prompt('Nuevo nombre de la pista', track.name || track.fileName || '');
+  const proposed = await showAppPrompt('Escribe el nuevo nombre de la pista.', {
+    title: 'Renombrar pista',
+    defaultValue: track.name || track.fileName || '',
+    confirmText: 'Guardar',
+  });
   if (proposed === null) {
     return;
   }
@@ -5577,14 +5742,21 @@ async function saveDropboxPlaylist(token) {
         if (response.status === 409 && dropboxPlaylistMeta?.rev) {
           // Conflicto de versión: resolver
           const remote = await pullDropboxPlaylistRaw(token).catch(() => null);
-          const wantMerge = window.confirm('Conflicto de cambios en la nube. ¿Combinar cambios locales y remotos?\nAceptar: combinar.\nCancelar: elegir versión.');
+          const wantMerge = await showAppConfirm('Conflicto de cambios en la nube. ¿Combinar cambios locales y remotos?\nAceptar: combinar.\nCancelar: elegir version.', {
+            title: 'Conflicto en Dropbox',
+            confirmText: 'Combinar',
+          });
           if (wantMerge && remote) {
             const merged = mergePlaylistDocuments(payload, remote.doc);
             // Reintenta guardando el merge contra la última rev
             dropboxPlaylistMeta.rev = remote.meta.rev || null;
             return await saveDropboxPlaylistWithPayload(token, merged, dropboxPlaylistMeta.rev);
           } else if (remote) {
-            const useCloud = window.confirm('¿Usar la versión de la nube y descartar cambios locales?');
+            const useCloud = await showAppConfirm('¿Usar la version de la nube y descartar cambios locales?', {
+              title: 'Resolver conflicto',
+              confirmText: 'Usar nube',
+              danger: true,
+            });
             if (useCloud) {
               applyRemoteDocumentToState(remote.doc);
               persistLocalPlaylist();
