@@ -795,19 +795,8 @@ function deleteActivePlaylist() {
   }
   const confirmed = window.confirm(`¿Eliminar la lista "${active.name}"? Se eliminarán sus pistas de esta sesión.`);
   if (!confirmed) return;
-  // Preparar eliminaciones de Dropbox y limpiar blobs/IDB
-  const removeRemotePaths = (active.tracks || [])
-    .map(track => track.dropboxPath)
-    .filter(Boolean);
-  removeRemotePaths.forEach(path => pendingDeletions.add(path));
-  (active.tracks || []).forEach(track => {
-    if (!track.isRemote && track.url) {
-      try { URL.revokeObjectURL(track.url); } catch {}
-    }
-    pendingUploads.delete(track.id);
-    waveformCache.delete(track.id);
-    deleteTrackFile(track.id).catch(console.error);
-  });
+  // Solo elimina recursos si esta playlist era su última referencia manual.
+  cleanupPlaylistTrackResources(active.tracks, active.id);
 
   const perListMeta = dropboxPerListMeta && dropboxPerListMeta[active.id];
   if (perListMeta && perListMeta.path) {
@@ -851,12 +840,69 @@ function trackExistsInPlaylist(playlist, trackId) {
   return playlist.tracks.some(track => track && track.id === trackId);
 }
 
-function isTrackInOtherManualPlaylists(trackId, excludePlaylistId = null) {
-  return state.playlists.some(playlist => {
-    if (!playlist || playlist.isAuto) return false;
-    if (excludePlaylistId && playlist.id === excludePlaylistId) return false;
-    return trackExistsInPlaylist(playlist, trackId);
-  });
+function countTrackReferencesInManualPlaylists(trackId, excludePlaylistId = null) {
+  let count = 0;
+  for (const playlist of state.playlists) {
+    if (!playlist || playlist.isAuto) continue;
+    if (excludePlaylistId && playlist.id === excludePlaylistId) continue;
+    for (const track of playlist.tracks || []) {
+      if (track && track.id === trackId) {
+        count += 1;
+      }
+    }
+  }
+  return count;
+}
+
+function countDropboxPathReferences(path, excludePlaylistId = null) {
+  if (!path) return 0;
+  let count = 0;
+  for (const playlist of state.playlists) {
+    if (!playlist || playlist.isAuto) continue;
+    if (excludePlaylistId && playlist.id === excludePlaylistId) continue;
+    for (const track of playlist.tracks || []) {
+      if (track?.dropboxPath === path) {
+        count += 1;
+      }
+    }
+  }
+  return count;
+}
+
+function cleanupTrackResources(track, options = {}) {
+  const { deleteRemote = false } = options || {};
+  if (!track) return;
+  if (!track.isRemote && track.url) {
+    try { URL.revokeObjectURL(track.url); } catch {}
+  }
+  pendingUploads.delete(track.id);
+  waveformCache.delete(track.id);
+  if (track.coverUrl) {
+    try { URL.revokeObjectURL(track.coverUrl); } catch {}
+    track.coverUrl = null;
+  }
+  deleteTrackFile(track.id).catch(console.error);
+  if (deleteRemote && track.dropboxPath) {
+    pendingDeletions.add(track.dropboxPath);
+  }
+}
+
+function cleanupPlaylistTrackResources(tracks, playlistId) {
+  const uniqueTracks = new Map();
+  for (const track of tracks || []) {
+    if (track?.id && !uniqueTracks.has(track.id)) {
+      uniqueTracks.set(track.id, track);
+    }
+  }
+  for (const track of uniqueTracks.values()) {
+    const remainingTrackRefs = countTrackReferencesInManualPlaylists(track.id, playlistId);
+    const remainingDropboxRefs = countDropboxPathReferences(track.dropboxPath, playlistId);
+    if (remainingTrackRefs === 0) {
+      cleanupTrackResources(track, { deleteRemote: remainingDropboxRefs === 0 });
+    } else if (track.dropboxPath && remainingDropboxRefs === 0) {
+      pendingDeletions.add(track.dropboxPath);
+    }
+  }
 }
 
 function ensureSharedTrackReferences() {
@@ -2015,22 +2061,7 @@ clearPlaylistBtn?.addEventListener('click', () => {
   if (!confirmed) {
     return;
   }
-  const removeRemotePaths = state.tracks
-    .map(track => track.dropboxPath)
-    .filter(Boolean);
-  removeRemotePaths.forEach(path => pendingDeletions.add(path));
-  pendingUploads.clear();
-  waveformCache.clear();
-  state.tracks.forEach(track => {
-    if (!track.isRemote && track.url) {
-      URL.revokeObjectURL(track.url);
-    }
-    if (track.coverUrl) {
-      try { URL.revokeObjectURL(track.coverUrl); } catch {}
-      track.coverUrl = null;
-    }
-    deleteTrackFile(track.id).catch(console.error);
-  });
+  cleanupPlaylistTrackResources(state.tracks, active?.id || null);
   state.tracks.splice(0, state.tracks.length);
   const current = getActivePlaylist();
   if (current) {
@@ -2448,21 +2479,29 @@ if ('serviceWorker' in navigator) {
       // Fuerza comprobación de actualizaciones en cada carga
       try { reg.update(); } catch {}
 
-      const activateUpdate = () => {
-        if (!navigator.serviceWorker.controller) return;
-        try { console.debug('[SW] auto-activate update'); } catch {}
-        try {
-          reg.waiting?.postMessage({ type: 'SKIP_WAITING' });
-          reg.waiting?.skipWaiting?.();
-        } catch {}
-        const reload = () => window.location.reload();
-        let reloaded = false;
-        const onControllerChange = () => {
-          try { console.debug('[SW] controllerchange → reload'); } catch {}
-          if (!reloaded) { reloaded = true; reload(); }
-        };
-        navigator.serviceWorker.addEventListener('controllerchange', onControllerChange, { once: true });
-        setTimeout(reload, 800);
+      let updateNoticeEl = null;
+      const showUpdateNotice = () => {
+        if (!navigator.serviceWorker.controller || !reg.waiting) return;
+        if (updateNoticeEl?.isConnected) return;
+        const notice = document.createElement('div');
+        notice.className = 'sw-update-notice';
+        notice.setAttribute('role', 'status');
+
+        const text = document.createElement('span');
+        text.textContent = 'Hay una nueva version disponible.';
+
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.textContent = 'Actualizar';
+        button.addEventListener('click', () => {
+          const reload = () => window.location.reload();
+          navigator.serviceWorker.addEventListener('controllerchange', reload, { once: true });
+          try { reg.waiting?.postMessage({ type: 'SKIP_WAITING' }); } catch {}
+        });
+
+        notice.append(text, button);
+        document.body?.appendChild(notice);
+        updateNoticeEl = notice;
       };
 
       reg.addEventListener('updatefound', () => {
@@ -2471,14 +2510,14 @@ if ('serviceWorker' in navigator) {
         installing?.addEventListener('statechange', () => {
           try { console.debug('[SW] installing state:', installing.state); } catch {}
           if (installing.state === 'installed') {
-            activateUpdate();
+            showUpdateNotice();
           }
         });
       });
 
-      // Si ya hay un worker en espera, actívalo de inmediato
+      // Si ya hay un worker en espera, ofrece actualización explícita.
       if (reg.waiting) {
-        activateUpdate();
+        showUpdateNotice();
       }
     }).catch(err => {
       try { console.debug('[SW] register failed', err); } catch {}
@@ -2963,21 +3002,12 @@ function removeTrack(index) {
   if (!confirmed) {
     return;
   }
-  const usedElsewhere = isTrackInOtherManualPlaylists(track.id, active?.id || null);
-  if (!usedElsewhere) {
-    if (!track.isRemote && track.url) {
-      URL.revokeObjectURL(track.url);
-    }
-    pendingUploads.delete(track.id);
-    waveformCache.delete(track.id);
-    if (track.coverUrl) {
-      try { URL.revokeObjectURL(track.coverUrl); } catch {}
-      track.coverUrl = null;
-    }
-    deleteTrackFile(track.id).catch(console.error);
-    if (track.dropboxPath) {
-      pendingDeletions.add(track.dropboxPath);
-    }
+  const remainingTrackRefs = countTrackReferencesInManualPlaylists(track.id, active?.id || null);
+  const remainingDropboxRefs = countDropboxPathReferences(track.dropboxPath, active?.id || null);
+  if (remainingTrackRefs === 0) {
+    cleanupTrackResources(track, { deleteRemote: remainingDropboxRefs === 0 });
+  } else if (track.dropboxPath && remainingDropboxRefs === 0) {
+    pendingDeletions.add(track.dropboxPath);
   }
   state.tracks.splice(index, 1);
   const playlist = getActivePlaylist();

@@ -1,4 +1,4 @@
-const CACHE_NAME = 'edumix-cache-v1.6.1';
+const CACHE_NAME = 'edumix-cache-v1.6.2';
 // Mantén el shell mínimo y coherente: evita diferencias y claves ambiguas
 const APP_SHELL = [
   './index.html',
@@ -14,8 +14,6 @@ self.addEventListener('install', event => {
   event.waitUntil(
     caches.open(CACHE_NAME)
       .then(cache => cache.addAll(APP_SHELL))
-      // Activación inmediata de nuevas versiones del SW
-      .then(() => self.skipWaiting())
       .catch(() => {
         // Si algo falla al precachear, no bloquees la instalación por completo
         // (se podrá rellenar la caché bajo demanda en los fetch)

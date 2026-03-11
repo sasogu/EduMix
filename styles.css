@@ -18,6 +18,26 @@ body {
   flex-direction: column;
 }
 
+.sw-update-notice {
+  position: fixed;
+  right: 1rem;
+  bottom: 1rem;
+  z-index: 1000;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 0.9rem;
+  background: rgba(31, 38, 51, 0.94);
+  color: #fff;
+  box-shadow: 0 12px 24px rgba(31, 38, 51, 0.22);
+}
+
+.sw-update-notice button {
+  box-shadow: none;
+}
+
 .header-actions {
   display: inline-flex;
   align-items: center;
