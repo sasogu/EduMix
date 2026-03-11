@@ -413,7 +413,6 @@ const waveformState = {
   progress: 0,
 };
 const waveformCache = new Map();
-let waveformResizeFrame = null;
 // Prefetch de siguiente pista remota
 let lastPrefetchForTrackId = null;
 let storageStatsTimer = null;
@@ -990,6 +989,18 @@ function handleWaveformClick(ev) {
   return waveformUi.handleWaveformClick(ev, state, players, activePlayerIndex, updateTimeDisplay, updateMediaSessionPosition);
 }
 
+function setWaveformTrack(track) {
+  return waveformUi.setWaveformTrack(track);
+}
+
+function scheduleWaveformResize() {
+  return waveformUi.scheduleWaveformResize();
+}
+
+function scheduleWaveformGeneration(track) {
+  return waveformUi.scheduleWaveformGeneration(track);
+}
+
 function peekNextIndex() {
   if (state.autoLoop && state.currentIndex !== -1) {
     return state.currentIndex;
@@ -1023,138 +1034,6 @@ function maybePrefetchNext() {
       .finally(() => { next._prefetching = false; });
   } catch (e) {
     // evitar que errores rompan el timeupdate
-  }
-}
-
-function setWaveformTrack(track) {
-  // Resetear barra de progreso simple
-  if (progressFill && progressHandle) {
-    progressFill.style.width = '0%';
-    progressHandle.style.left = '0%';
-  }
-  
-  if (!waveformCanvas || !waveformContainer) {
-    return;
-  }
-  if (!track) {
-    waveformState.trackId = null;
-    waveformState.peaks = null;
-    waveformState.duration = 0;
-    waveformState.progress = 0;
-    waveformContainer.classList.remove('is-loading');
-    waveformContainer.classList.remove('has-data');
-    if (waveformMessage) {
-      waveformMessage.textContent = 'Selecciona una pista para visualizar su forma de onda.';
-    }
-    drawWaveform(null, 0);
-    return;
-  }
-  waveformState.trackId = track.id;
-  waveformState.duration = track.duration ?? waveformState.duration ?? 0;
-  waveformState.progress = 0;
-  if (track.waveformStatus && track.waveformStatus.startsWith('disabled')) {
-    waveformState.peaks = null;
-    waveformContainer.classList.remove('is-loading');
-    waveformContainer.classList.remove('has-data');
-    if (waveformMessage) {
-      waveformMessage.textContent = getWaveformDisabledMessage(track);
-    }
-    drawWaveform(null, 0);
-    return;
-  }
-  if (track.waveform?.peaks?.length) {
-    waveformState.peaks = track.waveform.peaks;
-    waveformState.duration = track.waveform.duration ?? waveformState.duration;
-    waveformContainer.classList.remove('is-loading');
-    waveformContainer.classList.add('has-data');
-    if (waveformMessage) {
-      waveformMessage.textContent = '';
-    }
-    drawWaveform(waveformState.peaks, waveformState.progress);
-  } else {
-    waveformState.peaks = null;
-    
-    // Solo generar forma de onda si está visible
-    if (!waveformContainer.hidden) {
-      waveformContainer.classList.add('is-loading');
-      if (waveformMessage) {
-        waveformMessage.textContent = 'Generando forma de onda…';
-      }
-      drawWaveform(null, 0);
-      ensureWaveform(track)
-      .then(result => {
-        if (!result || waveformState.trackId !== track.id) {
-          return;
-        }
-        waveformContainer.classList.remove('is-loading');
-        if (result.disabled) {
-          waveformContainer.classList.remove('has-data');
-          if (waveformMessage) {
-            waveformMessage.textContent = getWaveformDisabledMessage(track);
-          }
-          drawWaveform(null, 0);
-          return;
-        }
-        waveformState.peaks = result.peaks;
-        waveformState.duration = result.duration ?? waveformState.duration;
-        waveformContainer.classList.add('has-data');
-        if (waveformMessage) {
-          waveformMessage.textContent = '';
-        }
-        drawWaveform(waveformState.peaks, waveformState.progress);
-      })
-      .catch(error => {
-        console.error('Error generando forma de onda', error);
-        if (waveformState.trackId === track.id) {
-          waveformContainer.classList.remove('is-loading');
-          waveformContainer.classList.remove('has-data');
-          if (waveformMessage) {
-            waveformMessage.textContent = 'No se pudo generar la forma de onda.';
-          }
-        }
-      });
-    }
-  }
-}
-
-function getWaveformDisabledMessage(track) {
-  if (!track || !track.waveformStatus) {
-    return 'Forma de onda no disponible para esta pista.';
-  }
-  if (track.waveformStatus === 'disabled:size') {
-    const size = firstFiniteNumber([track.size, track.dropboxSize]);
-    const formatted = size ? formatBytes(size) : formatBytes(WAVEFORM_MAX_SOURCE_BYTES);
-    return `Forma de onda desactivada: archivo demasiado grande (${formatted}).`;
-  }
-  if (track.waveformStatus === 'disabled:duration') {
-    const duration = Number(track.duration);
-    const formatted = Number.isFinite(duration) ? formatDuration(duration) : formatDuration(WAVEFORM_MAX_SOURCE_DURATION);
-    return `Forma de onda desactivada: pista demasiado larga (${formatted}).`;
-  }
-  return 'Forma de onda no disponible para esta pista.';
-}
-
-function scheduleWaveformResize() {
-  if (!waveformCanvas) {
-    return;
-  }
-  if (waveformResizeFrame) {
-    cancelAnimationFrame(waveformResizeFrame);
-  }
-  waveformResizeFrame = requestAnimationFrame(() => {
-    waveformResizeFrame = null;
-    if (waveformState.peaks && waveformState.peaks.length) {
-      drawWaveform(waveformState.peaks, waveformState.progress);
-    } else {
-      drawWaveform(null, 0);
-    }
-  });
-}
-
-function scheduleWaveformGeneration(track) {
-  // Solo generar la forma de onda si está visible
-  if (!waveformContainer.hidden && track) {
-    ensureWaveform(track).catch(console.error);
   }
 }
 

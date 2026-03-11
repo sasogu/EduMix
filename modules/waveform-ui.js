@@ -14,6 +14,7 @@ export function createWaveformUi(deps) {
     WAVEFORM_MAX_SOURCE_BYTES,
     WAVEFORM_MAX_SOURCE_DURATION,
   } = deps;
+  let waveformResizeFrame = null;
 
   function handleWaveformMetadata(player, state, persistLocalPlaylist) {
     if (!player.trackId) {
@@ -195,11 +196,36 @@ export function createWaveformUi(deps) {
     }
   }
 
+  function scheduleWaveformResize() {
+    if (!waveformCanvas) {
+      return;
+    }
+    if (waveformResizeFrame) {
+      cancelAnimationFrame(waveformResizeFrame);
+    }
+    waveformResizeFrame = requestAnimationFrame(() => {
+      waveformResizeFrame = null;
+      if (waveformState.peaks && waveformState.peaks.length) {
+        drawWaveform(waveformState.peaks, waveformState.progress);
+      } else {
+        drawWaveform(null, 0);
+      }
+    });
+  }
+
+  function scheduleWaveformGeneration(track) {
+    if (!waveformContainer.hidden && track) {
+      ensureWaveform(track).catch(console.error);
+    }
+  }
+
   return {
     handleWaveformMetadata,
     handleWaveformProgress,
     handleWaveformClick,
     getWaveformDisabledMessage,
+    scheduleWaveformGeneration,
+    scheduleWaveformResize,
     setWaveformTrack,
   };
 }
