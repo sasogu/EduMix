@@ -1,10 +1,13 @@
-const CACHE_NAME = 'edumix-cache-v1.6.9';
+try { importScripts('./version.js'); } catch {}
+
+const APP_VERSION = self.EDUMIX_VERSION || '1.6.10';
+const CACHE_NAME = `edumix-cache-v${APP_VERSION}`;
 // Mantén el shell mínimo y coherente: evita diferencias y claves ambiguas
 const APP_SHELL = [
   './index.html',
   './styles.css',
-  // Solo la versión actual usada por index.html
-  './app.js?v=1.6.1',
+  './version.js',
+  './app.js',
   './modules/app-dialog.js',
   './modules/playlist-crud.js',
   './modules/track-crud.js',

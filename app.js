@@ -57,6 +57,7 @@ const progressHandle = document.getElementById('progressHandle');
 const toggleWaveformBtn = document.getElementById('toggleWaveform');
 const coverArtImg = document.getElementById('coverArt');
 const nowRatingEl = document.getElementById('nowRating');
+const appVersionEl = document.getElementById('appVersion');
 const nowPlayingSectionEl = document.getElementById('nowPlayingSection');
 const nowPlayingRowEl = document.querySelector('.now-playing-row');
 const coverLightboxEl = document.getElementById('coverLightbox');
@@ -1968,6 +1969,18 @@ function getAudioContext() {
     audioContext = new (window.AudioContext || window.webkitAudioContext)();
   }
   return audioContext;
+}
+
+async function updateFooterVersion() {
+  if (!appVersionEl) return;
+  const version = globalThis.EDUMIX_VERSION;
+  if (version) {
+    appVersionEl.textContent = `EduMix v${version}`;
+    return;
+  }
+  if (!appVersionEl.textContent.trim()) {
+    appVersionEl.textContent = 'EduMix';
+  }
 }
 
 async function ensureContextRunning() {
@@ -6832,6 +6845,7 @@ function updateNormalizationLive() {
 }
 
 async function initialize() {
+  updateFooterVersion().catch(console.error);
   loadLocalPlaylist();
   await restoreLocalMedia();
   const allTracks = getAllTracks();
