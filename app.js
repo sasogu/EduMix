@@ -3,6 +3,7 @@ import { createLocalMediaStore } from './modules/local-media.js';
 import { createTrackDataHelpers } from './modules/track-data.js';
 import { createPlaylistCrud } from './modules/playlist-crud.js';
 import { createTrackCrud } from './modules/track-crud.js';
+import { createWaveformUi } from './modules/waveform-ui.js';
 import {
   createTrackCleanupHelpers,
   trackExistsInPlaylist,
@@ -871,56 +872,16 @@ function deserializeTrack(entry) {
 }
 
 function handleWaveformMetadata(player) {
-  if (!player.trackId) {
-    return;
-  }
-  const track = state.tracks.find(item => item.id === player.trackId);
-  if (!track) {
-    return;
-  }
-  const duration = player.audio.duration;
-  if (!Number.isFinite(duration) || duration <= 0) {
-    return;
-  }
-  if (!Number.isFinite(track.duration) || Math.abs(track.duration - duration) > 0.5) {
-    track.duration = duration;
-    if (waveformState.trackId === track.id) {
-      waveformState.duration = duration;
-    }
-    persistLocalPlaylist();
-  }
+  return waveformUi.handleWaveformMetadata(player, state, persistLocalPlaylist);
 }
 
 function handleWaveformProgress(player) {
-  const duration = player.audio.duration;
-  if (!Number.isFinite(duration) || duration <= 0) {
-    return;
-  }
-  
-  const progress = Math.min(1, Math.max(0, player.audio.currentTime / duration));
-  
-  // Actualizar barra de progreso simple
-  if (progressFill && progressHandle) {
-    const percentage = progress * 100;
-    progressFill.style.width = `${percentage}%`;
-    progressHandle.style.left = `${percentage}%`;
-  }
-  
-  // Actualizar forma de onda solo si está visible y corresponde a la pista actual
-  if (!waveformContainer.hidden && waveformCanvas && waveformState.trackId === player.trackId) {
-    if (Math.abs(progress - waveformState.progress) >= 0.003) {
-      waveformState.progress = progress;
-      if (waveformState.peaks && waveformState.peaks.length) {
-        drawWaveform(waveformState.peaks, waveformState.progress);
-      }
+  return waveformUi.handleWaveformProgress(player, () => {
+    if (player.trackId && lastPrefetchForTrackId !== player.trackId) {
+      lastPrefetchForTrackId = player.trackId;
+      maybePrefetchNext();
     }
-  }
-  
-  // Prefetch del siguiente cuando llega al 50% de la pista
-  if (player.trackId && lastPrefetchForTrackId !== player.trackId && progress >= 0.5) {
-    lastPrefetchForTrackId = player.trackId;
-    maybePrefetchNext();
-  }
+  });
 }
 
 function prepareWaveformCanvas() {
@@ -1009,30 +970,24 @@ function drawWaveform(peaks, progress = 0) {
   }
 }
 
+const waveformUi = createWaveformUi({
+  waveformCanvas,
+  waveformContainer,
+  waveformMessage,
+  progressFill,
+  progressHandle,
+  waveformState,
+  drawWaveform,
+  ensureWaveform,
+  firstFiniteNumber,
+  formatBytes,
+  formatDuration,
+  WAVEFORM_MAX_SOURCE_BYTES,
+  WAVEFORM_MAX_SOURCE_DURATION,
+});
+
 function handleWaveformClick(ev) {
-  try {
-    if (!waveformCanvas) return;
-    if (state.currentIndex === -1) return;
-    const p = players[activePlayerIndex];
-    if (!p || !p.audio) return;
-    const duration = Number.isFinite(p.audio.duration) ? p.audio.duration : 0;
-    if (!duration) return;
-    const rect = waveformCanvas.getBoundingClientRect();
-    const clientX = (ev && typeof ev.clientX === 'number') ? ev.clientX : (ev.touches && ev.touches[0] ? ev.touches[0].clientX : null);
-    if (clientX == null) return;
-    const x = Math.max(0, Math.min(rect.width, clientX - rect.left));
-    const ratio = rect.width ? (x / rect.width) : 0;
-    const target = Math.max(0, Math.min(duration - 0.05, ratio * duration));
-    p.audio.currentTime = target;
-    waveformState.progress = Math.max(0, Math.min(1, ratio));
-    if (waveformState.peaks && waveformState.peaks.length) {
-      drawWaveform(waveformState.peaks, waveformState.progress);
-    }
-    updateTimeDisplay(p);
-    updateMediaSessionPosition(p);
-  } catch (e) {
-    console.warn('seek via waveform failed', e);
-  }
+  return waveformUi.handleWaveformClick(ev, state, players, activePlayerIndex, updateTimeDisplay, updateMediaSessionPosition);
 }
 
 function peekNextIndex() {

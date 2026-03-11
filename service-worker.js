@@ -1,6 +1,6 @@
 try { importScripts('./version.js'); } catch {}
 
-const APP_VERSION = self.EDUMIX_VERSION || '1.6.12';
+const APP_VERSION = self.EDUMIX_VERSION || '1.6.13';
 const CACHE_NAME = `edumix-cache-v${APP_VERSION}`;
 // Mantén el shell mínimo y coherente: evita diferencias y claves ambiguas
 const APP_SHELL = [
@@ -14,6 +14,7 @@ const APP_SHELL = [
   './modules/playlist-crud.js',
   './modules/track-crud.js',
   './modules/track-utils.js',
+  './modules/waveform-ui.js',
   './manifest.webmanifest',
   './icons/icon-192.png',
   './icons/icon-512.png',
