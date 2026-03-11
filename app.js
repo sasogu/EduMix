@@ -1,4 +1,5 @@
 import { createAppDialog } from './modules/app-dialog.js';
+import { createTrackDataHelpers } from './modules/track-data.js';
 import { createPlaylistCrud } from './modules/playlist-crud.js';
 import { createTrackCrud } from './modules/track-crud.js';
 import {
@@ -769,6 +770,12 @@ const {
   playlistsRef: () => state.playlists,
 });
 
+const trackData = createTrackDataHelpers({
+  coerceDropboxBoolean,
+  coerceDropboxNumber,
+  syncTracksFromActivePlaylist,
+});
+
 const playlistCrud = createPlaylistCrud({
   state,
   createPlaylistObject,
@@ -832,100 +839,20 @@ function getAllTracks(options = {}) {
 }
 
 function ensureSharedTrackReferences() {
-  const map = new Map();
-  for (const playlist of state.playlists) {
-    if (!playlist || !Array.isArray(playlist.tracks)) continue;
-    for (let i = 0; i < playlist.tracks.length; i += 1) {
-      const track = playlist.tracks[i];
-      if (!track || !track.id) continue;
-      const existing = map.get(track.id);
-      if (existing) {
-        playlist.tracks[i] = existing;
-      } else {
-        map.set(track.id, track);
-      }
-    }
-  }
-  syncTracksFromActivePlaylist();
+  return trackData.ensureSharedTrackReferences(state.playlists);
 }
 
 function serializeTrack(track) {
-  return {
-    id: track.id,
-    name: track.name,
-    userRenamed: !!track.userRenamed,
-    fileName: track.fileName,
-    artist: track.artist ?? null,
-    album: track.album ?? null,
-    isFavorite: !!track.isFavorite,
-    duration: track.duration,
-    updatedAt: track.updatedAt ?? null,
-    rating: Number.isFinite(track.rating) ? track.rating : 0,
-    normalizationGain: Number.isFinite(track.normalizationGain) ? track.normalizationGain : null,
-    size: track.size ?? null,
-    lastModified: track.lastModified ?? null,
-    dropboxPath: track.dropboxPath ?? null,
-    dropboxRev: track.dropboxRev ?? null,
-    dropboxSize: track.dropboxSize ?? null,
-    dropboxUpdatedAt: track.dropboxUpdatedAt ?? null,
-    waveform: track.waveform ?? null,
-    waveformStatus: track.waveformStatus ?? null,
-  };
+  return trackData.serializeTrack(track);
 }
 
 // Local storage serializer (omit heavy fields like waveform to avoid quota issues)
 function serializeTrackLocal(track) {
-  return {
-    id: track.id,
-    name: track.name,
-    userRenamed: !!track.userRenamed,
-    fileName: track.fileName,
-    artist: track.artist ?? null,
-    album: track.album ?? null,
-    isFavorite: !!track.isFavorite,
-    duration: track.duration,
-    updatedAt: track.updatedAt ?? null,
-    rating: Number.isFinite(track.rating) ? track.rating : 0,
-    normalizationGain: Number.isFinite(track.normalizationGain) ? track.normalizationGain : null,
-    size: track.size ?? null,
-    lastModified: track.lastModified ?? null,
-    dropboxPath: track.dropboxPath ?? null,
-    dropboxRev: track.dropboxRev ?? null,
-    dropboxSize: track.dropboxSize ?? null,
-    dropboxUpdatedAt: track.dropboxUpdatedAt ?? null,
-    // waveform intentionally omitted
-    waveformStatus: track.waveformStatus ?? null,
-  };
+  return trackData.serializeTrackLocal(track);
 }
 
 function deserializeTrack(entry) {
-  const normalizedFavorite = coerceDropboxBoolean(entry?.isFavorite);
-  const normalizedRating = coerceDropboxNumber(entry?.rating);
-  const normalizedGain = coerceDropboxNumber(entry?.normalizationGain);
-  return {
-    id: entry.id,
-    name: entry.name,
-    userRenamed: !!entry.userRenamed,
-    fileName: entry.fileName ?? entry.name,
-    artist: entry.artist || '',
-    album: entry.album || '',
-    isFavorite: normalizedFavorite !== null ? normalizedFavorite : false,
-    url: null,
-    duration: entry.duration ?? null,
-    updatedAt: entry.updatedAt ?? null,
-    rating: normalizedRating !== null ? normalizedRating : 0,
-    normalizationGain: normalizedGain !== null ? normalizedGain : null,
-    size: entry.size ?? null,
-    lastModified: entry.lastModified ?? null,
-    dropboxPath: entry.dropboxPath ?? null,
-    dropboxRev: entry.dropboxRev ?? null,
-    dropboxSize: entry.dropboxSize ?? null,
-    dropboxUpdatedAt: entry.dropboxUpdatedAt ?? null,
-    waveform: entry.waveform ?? null,
-    waveformStatus: entry.waveformStatus ?? null,
-    urlExpiresAt: 0,
-    isRemote: Boolean(entry.dropboxPath),
-  };
+  return trackData.deserializeTrack(entry);
 }
 
 function openMediaDatabase() {

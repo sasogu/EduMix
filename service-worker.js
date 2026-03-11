@@ -9,6 +9,7 @@ const APP_SHELL = [
   './version.js',
   './app.js',
   './modules/app-dialog.js',
+  './modules/track-data.js',
   './modules/playlist-crud.js',
   './modules/track-crud.js',
   './modules/track-utils.js',
