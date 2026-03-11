@@ -1,12 +1,49 @@
 export function createAppDialog(doc = document, win = window) {
-  const dialogEl = doc.getElementById('appDialog');
-  const titleEl = doc.getElementById('appDialogTitle');
-  const messageEl = doc.getElementById('appDialogMessage');
-  const inputEl = doc.getElementById('appDialogInput');
-  const selectEl = doc.getElementById('appDialogSelect');
-  const choicesEl = doc.getElementById('appDialogChoices');
-  const cancelBtn = doc.getElementById('appDialogCancel');
-  const confirmBtn = doc.getElementById('appDialogConfirm');
+  function ensureDialogElements() {
+    let dialogRoot = doc.getElementById('appDialog');
+    if (!dialogRoot) {
+      dialogRoot = doc.createElement('div');
+      dialogRoot.id = 'appDialog';
+      dialogRoot.className = 'app-dialog-backdrop';
+      dialogRoot.hidden = true;
+      dialogRoot.innerHTML = `
+        <div class="app-dialog" role="dialog" aria-modal="true" aria-labelledby="appDialogTitle" aria-describedby="appDialogMessage">
+          <h2 id="appDialogTitle">Mensaje</h2>
+          <p id="appDialogMessage"></p>
+          <input id="appDialogInput" type="text" hidden />
+          <select id="appDialogSelect" hidden></select>
+          <div id="appDialogChoices" class="app-dialog-choices" hidden></div>
+          <div class="app-dialog-actions">
+            <button id="appDialogCancel" type="button" class="ghost">Cancelar</button>
+            <button id="appDialogConfirm" type="button">Aceptar</button>
+          </div>
+        </div>
+      `;
+      doc.body?.appendChild(dialogRoot);
+    }
+
+    return {
+      dialogEl: dialogRoot,
+      titleEl: dialogRoot.querySelector('#appDialogTitle'),
+      messageEl: dialogRoot.querySelector('#appDialogMessage'),
+      inputEl: dialogRoot.querySelector('#appDialogInput'),
+      selectEl: dialogRoot.querySelector('#appDialogSelect'),
+      choicesEl: dialogRoot.querySelector('#appDialogChoices'),
+      cancelBtn: dialogRoot.querySelector('#appDialogCancel'),
+      confirmBtn: dialogRoot.querySelector('#appDialogConfirm'),
+    };
+  }
+
+  const {
+    dialogEl,
+    titleEl,
+    messageEl,
+    inputEl,
+    selectEl,
+    choicesEl,
+    cancelBtn,
+    confirmBtn,
+  } = ensureDialogElements();
 
   let resolver = null;
   let lastFocusedEl = null;
