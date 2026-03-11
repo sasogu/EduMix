@@ -1,8 +1,13 @@
+import {
+  countDropboxPathReferences,
+  countTrackReferencesInManualPlaylists,
+  trackExistsInPlaylist,
+} from './track-utils.js';
+
 export function createTrackCrud(deps) {
   const {
     state,
     getActivePlaylist,
-    trackExistsInPlaylist,
     getTrackDisplayTitle,
     showAppAlert,
     showAppSelect,
@@ -14,8 +19,6 @@ export function createTrackCrud(deps) {
     renderPlaylist,
     updateControls,
     updateNowPlaying,
-    countTrackReferencesInManualPlaylists,
-    countDropboxPathReferences,
     cleanupTrackResources,
     pendingDeletions,
     invalidateShuffle,
@@ -104,8 +107,8 @@ export function createTrackCrud(deps) {
     if (!confirmed) {
       return;
     }
-    const remainingTrackRefs = countTrackReferencesInManualPlaylists(track.id, active?.id || null);
-    const remainingDropboxRefs = countDropboxPathReferences(track.dropboxPath, active?.id || null);
+    const remainingTrackRefs = countTrackReferencesInManualPlaylists(state.playlists, track.id, active?.id || null);
+    const remainingDropboxRefs = countDropboxPathReferences(state.playlists, track.dropboxPath, active?.id || null);
     if (remainingTrackRefs === 0) {
       cleanupTrackResources(track, { deleteRemote: remainingDropboxRefs === 0 });
     } else if (track.dropboxPath && remainingDropboxRefs === 0) {

@@ -1,6 +1,10 @@
 import { createAppDialog } from './modules/app-dialog.js';
 import { createPlaylistCrud } from './modules/playlist-crud.js';
 import { createTrackCrud } from './modules/track-crud.js';
+import {
+  createTrackCleanupHelpers,
+  trackExistsInPlaylist,
+} from './modules/track-utils.js';
 
 const playlistEl = document.getElementById('playlist');
 const filePicker = document.getElementById('filePicker');
@@ -754,6 +758,17 @@ function setActivePlaylist(id) {
   scheduleStorageStatsUpdate();
 }
 
+const {
+  cleanupTrackResources,
+  cleanupPlaylistTrackResources,
+} = createTrackCleanupHelpers({
+  pendingUploads,
+  waveformCache,
+  deleteTrackFile,
+  pendingDeletions,
+  playlistsRef: () => state.playlists,
+});
+
 const playlistCrud = createPlaylistCrud({
   state,
   createPlaylistObject,
@@ -793,8 +808,6 @@ const trackCrud = createTrackCrud({
   renderPlaylist,
   updateControls,
   updateNowPlaying,
-  countTrackReferencesInManualPlaylists,
-  countDropboxPathReferences,
   cleanupTrackResources,
   pendingDeletions,
   invalidateShuffle,
@@ -816,76 +829,6 @@ function getAllTracks(options = {}) {
   return state.playlists
     .filter(playlist => includeAuto || !playlist.isAuto)
     .flatMap(playlist => playlist.tracks);
-}
-
-function trackExistsInPlaylist(playlist, trackId) {
-  if (!playlist || !Array.isArray(playlist.tracks)) return false;
-  return playlist.tracks.some(track => track && track.id === trackId);
-}
-
-function countTrackReferencesInManualPlaylists(trackId, excludePlaylistId = null) {
-  let count = 0;
-  for (const playlist of state.playlists) {
-    if (!playlist || playlist.isAuto) continue;
-    if (excludePlaylistId && playlist.id === excludePlaylistId) continue;
-    for (const track of playlist.tracks || []) {
-      if (track && track.id === trackId) {
-        count += 1;
-      }
-    }
-  }
-  return count;
-}
-
-function countDropboxPathReferences(path, excludePlaylistId = null) {
-  if (!path) return 0;
-  let count = 0;
-  for (const playlist of state.playlists) {
-    if (!playlist || playlist.isAuto) continue;
-    if (excludePlaylistId && playlist.id === excludePlaylistId) continue;
-    for (const track of playlist.tracks || []) {
-      if (track?.dropboxPath === path) {
-        count += 1;
-      }
-    }
-  }
-  return count;
-}
-
-function cleanupTrackResources(track, options = {}) {
-  const { deleteRemote = false } = options || {};
-  if (!track) return;
-  if (!track.isRemote && track.url) {
-    try { URL.revokeObjectURL(track.url); } catch {}
-  }
-  pendingUploads.delete(track.id);
-  waveformCache.delete(track.id);
-  if (track.coverUrl) {
-    try { URL.revokeObjectURL(track.coverUrl); } catch {}
-    track.coverUrl = null;
-  }
-  deleteTrackFile(track.id).catch(console.error);
-  if (deleteRemote && track.dropboxPath) {
-    pendingDeletions.add(track.dropboxPath);
-  }
-}
-
-function cleanupPlaylistTrackResources(tracks, playlistId) {
-  const uniqueTracks = new Map();
-  for (const track of tracks || []) {
-    if (track?.id && !uniqueTracks.has(track.id)) {
-      uniqueTracks.set(track.id, track);
-    }
-  }
-  for (const track of uniqueTracks.values()) {
-    const remainingTrackRefs = countTrackReferencesInManualPlaylists(track.id, playlistId);
-    const remainingDropboxRefs = countDropboxPathReferences(track.dropboxPath, playlistId);
-    if (remainingTrackRefs === 0) {
-      cleanupTrackResources(track, { deleteRemote: remainingDropboxRefs === 0 });
-    } else if (track.dropboxPath && remainingDropboxRefs === 0) {
-      pendingDeletions.add(track.dropboxPath);
-    }
-  }
 }
 
 function ensureSharedTrackReferences() {
