@@ -61,6 +61,8 @@ const appDialogEl = document.getElementById('appDialog');
 const appDialogTitleEl = document.getElementById('appDialogTitle');
 const appDialogMessageEl = document.getElementById('appDialogMessage');
 const appDialogInputEl = document.getElementById('appDialogInput');
+const appDialogSelectEl = document.getElementById('appDialogSelect');
+const appDialogChoicesEl = document.getElementById('appDialogChoices');
 const appDialogCancelBtn = document.getElementById('appDialogCancel');
 const appDialogConfirmBtn = document.getElementById('appDialogConfirm');
 const pagerEl = document.getElementById('playlistPager');
@@ -246,6 +248,14 @@ function closeAppDialog(result) {
     appDialogInputEl.hidden = true;
     appDialogInputEl.value = '';
   }
+  if (appDialogSelectEl) {
+    appDialogSelectEl.hidden = true;
+    appDialogSelectEl.innerHTML = '';
+  }
+  if (appDialogChoicesEl) {
+    appDialogChoicesEl.hidden = true;
+    appDialogChoicesEl.innerHTML = '';
+  }
   const focusTarget = appDialogLastFocusedEl;
   appDialogLastFocusedEl = null;
   try { focusTarget?.focus?.(); } catch {}
@@ -261,12 +271,16 @@ function openAppDialog(options = {}) {
     kind = 'alert',
     defaultValue = '',
     inputType = 'text',
+    selectOptions = [],
+    choiceOptions = [],
     danger = false,
   } = options || {};
 
-  if (!appDialogEl || !appDialogTitleEl || !appDialogMessageEl || !appDialogConfirmBtn || !appDialogCancelBtn || !appDialogInputEl) {
+  if (!appDialogEl || !appDialogTitleEl || !appDialogMessageEl || !appDialogConfirmBtn || !appDialogCancelBtn || !appDialogInputEl || !appDialogSelectEl || !appDialogChoicesEl) {
     if (kind === 'confirm') return Promise.resolve(window.confirm(message));
     if (kind === 'prompt') return Promise.resolve(window.prompt(message, defaultValue));
+    if (kind === 'select') return Promise.resolve(window.prompt(message, defaultValue));
+    if (kind === 'choice') return Promise.resolve(null);
     window.alert(message);
     return Promise.resolve(undefined);
   }
@@ -280,11 +294,38 @@ function openAppDialog(options = {}) {
   appDialogMessageEl.textContent = message;
   appDialogConfirmBtn.textContent = confirmText;
   appDialogCancelBtn.textContent = cancelText;
-  appDialogCancelBtn.hidden = kind === 'alert';
+  appDialogCancelBtn.hidden = kind === 'alert' || kind === 'choice';
+  appDialogConfirmBtn.hidden = kind === 'choice';
   appDialogConfirmBtn.classList.toggle('danger', !!danger);
   appDialogInputEl.hidden = kind !== 'prompt';
+  appDialogSelectEl.hidden = kind !== 'select';
+  appDialogChoicesEl.hidden = kind !== 'choice';
   appDialogInputEl.type = inputType;
   appDialogInputEl.value = defaultValue ?? '';
+  appDialogSelectEl.innerHTML = '';
+  appDialogChoicesEl.innerHTML = '';
+  if (kind === 'select') {
+    for (const optionDef of selectOptions) {
+      const option = document.createElement('option');
+      option.value = String(optionDef?.value ?? '');
+      option.textContent = String(optionDef?.label ?? option.value);
+      appDialogSelectEl.append(option);
+    }
+    appDialogSelectEl.value = String(defaultValue ?? '');
+  }
+  if (kind === 'choice') {
+    for (const choice of choiceOptions) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = `app-dialog-choice ${choice?.variant === 'ghost' ? 'ghost' : ''}`.trim();
+      button.textContent = String(choice?.label ?? '');
+      if (choice?.danger) {
+        button.classList.add('danger');
+      }
+      button.dataset.value = String(choice?.value ?? '');
+      appDialogChoicesEl.append(button);
+    }
+  }
   appDialogEl.hidden = false;
   document.body.classList.add('dialog-open');
 
@@ -295,6 +336,10 @@ function openAppDialog(options = {}) {
         if (kind === 'prompt') {
           appDialogInputEl.focus();
           appDialogInputEl.select();
+        } else if (kind === 'select') {
+          appDialogSelectEl.focus();
+        } else if (kind === 'choice') {
+          appDialogChoicesEl.querySelector('button')?.focus();
         } else {
           appDialogConfirmBtn.focus();
         }
@@ -313,6 +358,14 @@ function showAppConfirm(message, options = {}) {
 
 function showAppPrompt(message, options = {}) {
   return openAppDialog({ ...options, message, kind: 'prompt' });
+}
+
+function showAppSelect(message, options = {}) {
+  return openAppDialog({ ...options, message, kind: 'select' });
+}
+
+function showAppChoice(message, options = {}) {
+  return openAppDialog({ ...options, message, kind: 'choice' });
 }
 
 // Tema: claro/oscuro con persistencia
@@ -2132,6 +2185,10 @@ appDialogConfirmBtn?.addEventListener('click', () => {
     closeAppDialog(appDialogInputEl.value);
     return;
   }
+  if (!appDialogSelectEl?.hidden) {
+    closeAppDialog(appDialogSelectEl.value);
+    return;
+  }
   closeAppDialog(true);
 });
 
@@ -2146,6 +2203,12 @@ appDialogEl?.addEventListener('click', (event) => {
   }
 });
 
+appDialogChoicesEl?.addEventListener('click', (event) => {
+  const button = event.target.closest('button[data-value]');
+  if (!button || !appDialogResolver) return;
+  closeAppDialog(button.dataset.value || null);
+});
+
 window.addEventListener('keydown', (event) => {
   if (!appDialogResolver || appDialogEl?.hidden) return;
   if (event.key === 'Escape') {
@@ -2157,6 +2220,8 @@ window.addEventListener('keydown', (event) => {
     event.preventDefault();
     if (!appDialogInputEl?.hidden) {
       closeAppDialog(appDialogInputEl.value);
+    } else if (!appDialogSelectEl?.hidden) {
+      closeAppDialog(appDialogSelectEl.value);
     } else {
       closeAppDialog(true);
     }
@@ -3099,33 +3164,31 @@ async function copyTrackToPlaylist(index) {
     });
     return;
   }
-  const options = manualTargets.map((playlist, idx) => {
-    const hasTrack = trackExistsInPlaylist(playlist, track.id);
-    return `${idx + 1}. ${playlist.name}${hasTrack ? ' (ya contiene la pista)' : ''}`;
-  });
-  const firstAvailable = manualTargets.findIndex(playlist => !trackExistsInPlaylist(playlist, track.id));
-  if (firstAvailable === -1) {
+  const availableTargets = manualTargets.filter(playlist => !trackExistsInPlaylist(playlist, track.id));
+  const firstAvailable = availableTargets[0] || null;
+  if (!firstAvailable) {
     await showAppAlert('La pista ya forma parte de todas tus listas manuales.', {
       title: 'Sin destinos disponibles',
     });
     return;
   }
-  const message = `Selecciona la lista destino para "${getTrackDisplayTitle(track) || track.name || track.fileName || 'Pista'}":\n\n${options.join('\n')}\n\nIntroduce el número de la lista destino.`;
-  const input = await showAppPrompt(message, {
+  const input = await showAppSelect(`Selecciona la lista destino para "${getTrackDisplayTitle(track) || track.name || track.fileName || 'Pista'}".`, {
     title: 'Copiar pista',
-    defaultValue: String(firstAvailable + 1),
+    defaultValue: firstAvailable?.id || '',
     confirmText: 'Copiar',
-    inputType: 'number',
+    selectOptions: availableTargets.map(playlist => ({
+      value: playlist.id,
+      label: playlist.name,
+    })),
   });
   if (input === null) {
     return;
   }
-  const choice = Number.parseInt(String(input).trim(), 10);
-  if (!Number.isFinite(choice) || choice < 1 || choice > manualTargets.length) {
+  const target = availableTargets.find(playlist => playlist.id === String(input).trim());
+  if (!target) {
     await showAppAlert('Selección no válida. Intenta de nuevo.', { title: 'Destino no valido' });
     return;
   }
-  const target = manualTargets[choice - 1];
   if (trackExistsInPlaylist(target, track.id)) {
     await showAppAlert(`"${target.name}" ya tiene esta pista.`, { title: 'Pista duplicada' });
     return;
@@ -5742,31 +5805,30 @@ async function saveDropboxPlaylist(token) {
         if (response.status === 409 && dropboxPlaylistMeta?.rev) {
           // Conflicto de versión: resolver
           const remote = await pullDropboxPlaylistRaw(token).catch(() => null);
-          const wantMerge = await showAppConfirm('Conflicto de cambios en la nube. ¿Combinar cambios locales y remotos?\nAceptar: combinar.\nCancelar: elegir version.', {
+          const resolution = await showAppChoice('Se han detectado cambios locales y remotos en Dropbox. Elige como resolver el conflicto.', {
             title: 'Conflicto en Dropbox',
-            confirmText: 'Combinar',
+            choiceOptions: [
+              { value: 'merge', label: 'Combinar cambios locales y remotos' },
+              { value: 'cloud', label: 'Usar la version de la nube y descartar cambios locales', danger: true },
+              { value: 'overwrite', label: 'Mantener la version local y sobrescribir la nube', variant: 'ghost' },
+            ],
           });
-          if (wantMerge && remote) {
+          if (resolution === 'merge' && remote) {
             const merged = mergePlaylistDocuments(payload, remote.doc);
             // Reintenta guardando el merge contra la última rev
             dropboxPlaylistMeta.rev = remote.meta.rev || null;
             return await saveDropboxPlaylistWithPayload(token, merged, dropboxPlaylistMeta.rev);
-          } else if (remote) {
-            const useCloud = await showAppConfirm('¿Usar la version de la nube y descartar cambios locales?', {
-              title: 'Resolver conflicto',
-              confirmText: 'Usar nube',
-              danger: true,
-            });
-            if (useCloud) {
-              applyRemoteDocumentToState(remote.doc);
-              persistLocalPlaylist();
-              return; // no guardar local por ahora
-            } else {
-              // Forzar sobrescritura
-              dropboxPlaylistMeta.rev = null;
-              attempt += 1;
-              continue;
-            }
+          } else if (resolution === 'cloud' && remote) {
+            applyRemoteDocumentToState(remote.doc);
+            persistLocalPlaylist();
+            return; // no guardar local por ahora
+          } else if (resolution === 'overwrite') {
+            // Forzar sobrescritura
+            dropboxPlaylistMeta.rev = null;
+            attempt += 1;
+            continue;
+          } else {
+            return;
           }
         }
         const retrySeconds = parseDropboxRetryInfo(response.status, response.headers, text);
