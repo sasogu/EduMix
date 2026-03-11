@@ -1,3 +1,5 @@
+import { createAppDialog } from './modules/app-dialog.js';
+
 const playlistEl = document.getElementById('playlist');
 const filePicker = document.getElementById('filePicker');
 const filePickerFiles = document.getElementById('filePickerFiles');
@@ -57,14 +59,6 @@ const nowPlayingSectionEl = document.getElementById('nowPlayingSection');
 const nowPlayingRowEl = document.querySelector('.now-playing-row');
 const coverLightboxEl = document.getElementById('coverLightbox');
 const coverLightboxImg = document.getElementById('coverLightboxImg');
-const appDialogEl = document.getElementById('appDialog');
-const appDialogTitleEl = document.getElementById('appDialogTitle');
-const appDialogMessageEl = document.getElementById('appDialogMessage');
-const appDialogInputEl = document.getElementById('appDialogInput');
-const appDialogSelectEl = document.getElementById('appDialogSelect');
-const appDialogChoicesEl = document.getElementById('appDialogChoices');
-const appDialogCancelBtn = document.getElementById('appDialogCancel');
-const appDialogConfirmBtn = document.getElementById('appDialogConfirm');
 const pagerEl = document.getElementById('playlistPager');
 const pagerPrevBtn = document.getElementById('pagerPrev');
 const pagerNextBtn = document.getElementById('pagerNext');
@@ -82,6 +76,13 @@ const dropboxForceDeleteBtn = document.getElementById('dropboxForceDelete');
 const eqBassBtn = document.getElementById('eqBassBoost');
 const eqMidBtn = document.getElementById('eqMidBoost');
 const eqTrebleBtn = document.getElementById('eqTrebleBoost');
+
+const appDialog = createAppDialog();
+const showAppAlert = appDialog.alert;
+const showAppConfirm = appDialog.confirm;
+const showAppPrompt = appDialog.prompt;
+const showAppSelect = appDialog.select;
+const showAppChoice = appDialog.choice;
 
 const METADATA_LOOKUP_CONCURRENCY = 2;
 const METADATA_LOOKUP_COOLDOWN_MS = 1200;
@@ -238,136 +239,6 @@ function handlePendingPlaylistChange() {
   }
 }
 
-function closeAppDialog(result) {
-  if (!appDialogEl || !appDialogResolver) return;
-  const resolve = appDialogResolver;
-  appDialogResolver = null;
-  appDialogEl.hidden = true;
-  document.body.classList.remove('dialog-open');
-  if (appDialogInputEl) {
-    appDialogInputEl.hidden = true;
-    appDialogInputEl.value = '';
-  }
-  if (appDialogSelectEl) {
-    appDialogSelectEl.hidden = true;
-    appDialogSelectEl.innerHTML = '';
-  }
-  if (appDialogChoicesEl) {
-    appDialogChoicesEl.hidden = true;
-    appDialogChoicesEl.innerHTML = '';
-  }
-  const focusTarget = appDialogLastFocusedEl;
-  appDialogLastFocusedEl = null;
-  try { focusTarget?.focus?.(); } catch {}
-  resolve(result);
-}
-
-function openAppDialog(options = {}) {
-  const {
-    title = 'Mensaje',
-    message = '',
-    confirmText = 'Aceptar',
-    cancelText = 'Cancelar',
-    kind = 'alert',
-    defaultValue = '',
-    inputType = 'text',
-    selectOptions = [],
-    choiceOptions = [],
-    danger = false,
-  } = options || {};
-
-  if (!appDialogEl || !appDialogTitleEl || !appDialogMessageEl || !appDialogConfirmBtn || !appDialogCancelBtn || !appDialogInputEl || !appDialogSelectEl || !appDialogChoicesEl) {
-    if (kind === 'confirm') return Promise.resolve(window.confirm(message));
-    if (kind === 'prompt') return Promise.resolve(window.prompt(message, defaultValue));
-    if (kind === 'select') return Promise.resolve(window.prompt(message, defaultValue));
-    if (kind === 'choice') return Promise.resolve(null);
-    window.alert(message);
-    return Promise.resolve(undefined);
-  }
-
-  if (appDialogResolver) {
-    closeAppDialog(kind === 'confirm' ? false : null);
-  }
-
-  appDialogLastFocusedEl = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-  appDialogTitleEl.textContent = title;
-  appDialogMessageEl.textContent = message;
-  appDialogConfirmBtn.textContent = confirmText;
-  appDialogCancelBtn.textContent = cancelText;
-  appDialogCancelBtn.hidden = kind === 'alert' || kind === 'choice';
-  appDialogConfirmBtn.hidden = kind === 'choice';
-  appDialogConfirmBtn.classList.toggle('danger', !!danger);
-  appDialogInputEl.hidden = kind !== 'prompt';
-  appDialogSelectEl.hidden = kind !== 'select';
-  appDialogChoicesEl.hidden = kind !== 'choice';
-  appDialogInputEl.type = inputType;
-  appDialogInputEl.value = defaultValue ?? '';
-  appDialogSelectEl.innerHTML = '';
-  appDialogChoicesEl.innerHTML = '';
-  if (kind === 'select') {
-    for (const optionDef of selectOptions) {
-      const option = document.createElement('option');
-      option.value = String(optionDef?.value ?? '');
-      option.textContent = String(optionDef?.label ?? option.value);
-      appDialogSelectEl.append(option);
-    }
-    appDialogSelectEl.value = String(defaultValue ?? '');
-  }
-  if (kind === 'choice') {
-    for (const choice of choiceOptions) {
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.className = `app-dialog-choice ${choice?.variant === 'ghost' ? 'ghost' : ''}`.trim();
-      button.textContent = String(choice?.label ?? '');
-      if (choice?.danger) {
-        button.classList.add('danger');
-      }
-      button.dataset.value = String(choice?.value ?? '');
-      appDialogChoicesEl.append(button);
-    }
-  }
-  appDialogEl.hidden = false;
-  document.body.classList.add('dialog-open');
-
-  return new Promise(resolve => {
-    appDialogResolver = resolve;
-    setTimeout(() => {
-      try {
-        if (kind === 'prompt') {
-          appDialogInputEl.focus();
-          appDialogInputEl.select();
-        } else if (kind === 'select') {
-          appDialogSelectEl.focus();
-        } else if (kind === 'choice') {
-          appDialogChoicesEl.querySelector('button')?.focus();
-        } else {
-          appDialogConfirmBtn.focus();
-        }
-      } catch {}
-    }, 0);
-  });
-}
-
-function showAppAlert(message, options = {}) {
-  return openAppDialog({ ...options, message, kind: 'alert' });
-}
-
-function showAppConfirm(message, options = {}) {
-  return openAppDialog({ ...options, message, kind: 'confirm' });
-}
-
-function showAppPrompt(message, options = {}) {
-  return openAppDialog({ ...options, message, kind: 'prompt' });
-}
-
-function showAppSelect(message, options = {}) {
-  return openAppDialog({ ...options, message, kind: 'select' });
-}
-
-function showAppChoice(message, options = {}) {
-  return openAppDialog({ ...options, message, kind: 'choice' });
-}
-
 // Tema: claro/oscuro con persistencia
 function applyTheme(theme) {
   const root = document.documentElement;
@@ -494,8 +365,6 @@ const players = [];
 let activePlayerIndex = 0;
 let dragIndex = null;
 let deferredPrompt = null;
-let appDialogResolver = null;
-let appDialogLastFocusedEl = null;
 
 const pendingUploads = new Map();
 let pendingDeletions = new Set();
@@ -2179,55 +2048,6 @@ toggleWaveformBtn?.addEventListener('click', () => {
   }
 });
 
-appDialogConfirmBtn?.addEventListener('click', () => {
-  if (!appDialogResolver) return;
-  if (!appDialogInputEl?.hidden) {
-    closeAppDialog(appDialogInputEl.value);
-    return;
-  }
-  if (!appDialogSelectEl?.hidden) {
-    closeAppDialog(appDialogSelectEl.value);
-    return;
-  }
-  closeAppDialog(true);
-});
-
-appDialogCancelBtn?.addEventListener('click', () => {
-  if (!appDialogResolver) return;
-  closeAppDialog(false);
-});
-
-appDialogEl?.addEventListener('click', (event) => {
-  if (event.target === appDialogEl && appDialogResolver) {
-    closeAppDialog(false);
-  }
-});
-
-appDialogChoicesEl?.addEventListener('click', (event) => {
-  const button = event.target.closest('button[data-value]');
-  if (!button || !appDialogResolver) return;
-  closeAppDialog(button.dataset.value || null);
-});
-
-window.addEventListener('keydown', (event) => {
-  if (!appDialogResolver || appDialogEl?.hidden) return;
-  if (event.key === 'Escape') {
-    event.preventDefault();
-    closeAppDialog(false);
-    return;
-  }
-  if (event.key === 'Enter') {
-    event.preventDefault();
-    if (!appDialogInputEl?.hidden) {
-      closeAppDialog(appDialogInputEl.value);
-    } else if (!appDialogSelectEl?.hidden) {
-      closeAppDialog(appDialogSelectEl.value);
-    } else {
-      closeAppDialog(true);
-    }
-  }
-});
-
 filePicker?.addEventListener('change', event => {
   const files = Array.from(event.target.files || []);
   if (!files.length) {
@@ -2687,8 +2507,16 @@ if ('serviceWorker' in navigator) {
       try { reg.update(); } catch {}
 
       let updateNoticeEl = null;
+      let updateNoticeDismissed = false;
+      const removeUpdateNotice = () => {
+        if (updateNoticeEl?.isConnected) {
+          updateNoticeEl.remove();
+        }
+        updateNoticeEl = null;
+      };
       const showUpdateNotice = () => {
         if (!navigator.serviceWorker.controller || !reg.waiting) return;
+        if (updateNoticeDismissed) return;
         if (updateNoticeEl?.isConnected) return;
         const notice = document.createElement('div');
         notice.className = 'sw-update-notice';
@@ -2697,21 +2525,36 @@ if ('serviceWorker' in navigator) {
         const text = document.createElement('span');
         text.textContent = 'Hay una nueva version disponible.';
 
-        const button = document.createElement('button');
-        button.type = 'button';
-        button.textContent = 'Actualizar';
-        button.addEventListener('click', () => {
+        const actions = document.createElement('div');
+        actions.className = 'sw-update-actions';
+
+        const updateButton = document.createElement('button');
+        updateButton.type = 'button';
+        updateButton.textContent = 'Actualizar';
+        updateButton.addEventListener('click', () => {
+          removeUpdateNotice();
           const reload = () => window.location.reload();
           navigator.serviceWorker.addEventListener('controllerchange', reload, { once: true });
           try { reg.waiting?.postMessage({ type: 'SKIP_WAITING' }); } catch {}
         });
 
-        notice.append(text, button);
+        const dismissButton = document.createElement('button');
+        dismissButton.type = 'button';
+        dismissButton.className = 'ghost';
+        dismissButton.textContent = 'Cerrar';
+        dismissButton.addEventListener('click', () => {
+          updateNoticeDismissed = true;
+          removeUpdateNotice();
+        });
+
+        actions.append(updateButton, dismissButton);
+        notice.append(text, actions);
         document.body?.appendChild(notice);
         updateNoticeEl = notice;
       };
 
       reg.addEventListener('updatefound', () => {
+        updateNoticeDismissed = false;
         const installing = reg.installing;
         try { console.debug('[SW] updatefound', installing); } catch {}
         installing?.addEventListener('statechange', () => {

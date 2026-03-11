@@ -42,6 +42,11 @@ body.dialog-open {
   box-shadow: none;
 }
 
+.sw-update-actions {
+  display: inline-flex;
+  gap: 0.5rem;
+}
+
 .app-dialog-backdrop {
   position: fixed;
   inset: 0;

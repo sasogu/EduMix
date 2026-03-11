@@ -1,10 +1,11 @@
-const CACHE_NAME = 'edumix-cache-v1.6.3';
+const CACHE_NAME = 'edumix-cache-v1.6.5';
 // Mantén el shell mínimo y coherente: evita diferencias y claves ambiguas
 const APP_SHELL = [
   './index.html',
   './styles.css',
   // Solo la versión actual usada por index.html
   './app.js?v=1.6.1',
+  './modules/app-dialog.js',
   './manifest.webmanifest',
   './icons/icon-192.png',
   './icons/icon-512.png',
