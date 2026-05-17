@@ -6542,7 +6542,9 @@ async function pullDropboxPlaylistsPerList(token) {
       pl.tracks.forEach(t => mapLocalTracks.set(t.id, { track: t, playlistId: pl.id }));
     });
     const nextPlaylists = [];
-    const remotePaths = new Set(downloaded.map(({ path }) => String(path || '').toLowerCase()).filter(Boolean));
+    // remotePaths debe incluir TODOS los ficheros del listing, no solo los descargados,
+    // para que las listas sin cambios no se traten como borradas en Dropbox.
+    const remotePaths = new Set(jsonFiles.map(f => String(f.path_lower || '').toLowerCase()).filter(Boolean));
     downloaded.forEach(({ path, meta, doc }) => {
       const sourceId = doc.id || generateId('pl');
       const autoConfig = doc.autoType ? AUTO_PLAYLISTS[doc.autoType] : null;
