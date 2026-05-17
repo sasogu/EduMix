@@ -77,6 +77,7 @@ async function staleWhileRevalidate(request) {
 }
 
 self.addEventListener('install', event => {
+  self.skipWaiting(); // Activa inmediatamente sin esperar a que se cierren pestañas
   event.waitUntil(
     caches.open(CACHE_NAME)
       .then(cache => cache.addAll(APP_SHELL))

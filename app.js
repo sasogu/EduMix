@@ -161,6 +161,7 @@ const STORAGE_KEYS = {
   dropboxPending: 'edumix-dropbox-pending-deletions',
   dropboxPerListMeta: 'edumix-dropbox-perlist-meta',
   viewPerList: 'edumix-view-per-list',
+  deletedPlaylists: 'edumix-deleted-playlists',
 };
 
 const dropboxConfig = {
@@ -379,6 +380,27 @@ let deferredPrompt = null;
 
 const pendingUploads = new Map();
 let pendingDeletions = new Set();
+
+// IDs de listas eliminadas — se persiste para evitar que Dropbox las reimporte
+function loadDeletedPlaylistIds() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.deletedPlaylists);
+    return raw ? new Set(JSON.parse(raw)) : new Set();
+  } catch { return new Set(); }
+}
+function saveDeletedPlaylistIds(ids) {
+  try { localStorage.setItem(STORAGE_KEYS.deletedPlaylists, JSON.stringify([...ids])); } catch {}
+}
+function recordDeletedPlaylistId(id) {
+  const ids = loadDeletedPlaylistIds();
+  ids.add(id);
+  saveDeletedPlaylistIds(ids);
+}
+function clearDeletedPlaylistId(id) {
+  const ids = loadDeletedPlaylistIds();
+  ids.delete(id);
+  saveDeletedPlaylistIds(ids);
+}
 
 let dropboxAuth = loadDropboxAuth();
 const dropboxState = {
@@ -813,6 +835,7 @@ const playlistCrud = createPlaylistCrud({
   cleanupPlaylistTrackResources,
   pendingDeletions,
   dropboxPerListMeta,
+  recordDeletedPlaylistId,
 });
 const { createPlaylist, renameActivePlaylist, deleteActivePlaylist } = playlistCrud;
 
@@ -3914,6 +3937,11 @@ function loadLocalPlaylist() {
       state.playlists = [fallback];
       state.activePlaylistId = fallback.id;
     }
+    // Filtrar listas que el usuario eliminó explícitamente
+    const _deletedIds = loadDeletedPlaylistIds();
+    if (_deletedIds.size > 0) {
+      state.playlists = state.playlists.filter(pl => !_deletedIds.has(pl.id));
+    }
     ensureSharedTrackReferences();
     ensurePlaylistsInitialized();
     if (data?.playlistRev || data?.playlistServerModified) {
@@ -6590,11 +6618,13 @@ async function pullDropboxPlaylistsPerList(token) {
       pl.tracks.forEach(t => mapLocalTracks.set(t.id, { track: t, playlistId: pl.id }));
     });
     const nextPlaylists = [];
+    const deletedPlaylistIds = loadDeletedPlaylistIds();
     // remotePaths debe incluir TODOS los ficheros del listing, no solo los descargados,
     // para que las listas sin cambios no se traten como borradas en Dropbox.
     const remotePaths = new Set(jsonFiles.map(f => String(f.path_lower || '').toLowerCase()).filter(Boolean));
     downloaded.forEach(({ path, meta, doc }) => {
       const sourceId = doc.id || generateId('pl');
+      if (deletedPlaylistIds.has(sourceId)) return; // nunca reimportar listas eliminadas
       const autoConfig = doc.autoType ? AUTO_PLAYLISTS[doc.autoType] : null;
       const id = autoConfig?.id || sourceId;
       const playlist = {

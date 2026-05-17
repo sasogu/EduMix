@@ -1,1 +1,1 @@
-self.EDUMIX_VERSION = '1.6.22';
+self.EDUMIX_VERSION = '1.6.23';

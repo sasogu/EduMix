@@ -20,6 +20,7 @@ export function createPlaylistCrud(deps) {
     cleanupPlaylistTrackResources,
     pendingDeletions,
     dropboxPerListMeta,
+    recordDeletedPlaylistId,
   } = deps;
 
   function createPlaylist(name) {
@@ -84,6 +85,8 @@ export function createPlaylistCrud(deps) {
     if (!confirmed) return;
 
     cleanupPlaylistTrackResources(active.tracks, active.id);
+
+    recordDeletedPlaylistId(active.id);
 
     const perListMeta = dropboxPerListMeta && dropboxPerListMeta[active.id];
     if (perListMeta && perListMeta.path) {
