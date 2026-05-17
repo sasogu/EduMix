@@ -6548,7 +6548,12 @@ async function pullDropboxPlaylistsPerList(token) {
     }
     const listing = await response.json();
     const entries = Array.isArray(listing?.entries) ? listing.entries : [];
-    const jsonFiles = entries.filter(e => e['.tag'] === 'file' && typeof e?.path_lower === 'string' && e.name.toLowerCase().endsWith('.json') && e.name !== '_settings.json');
+    const jsonFiles = entries.filter(e => {
+      if (e['.tag'] !== 'file' || typeof e?.path_lower !== 'string') return false;
+      if (!e.name.toLowerCase().endsWith('.json') || e.name === '_settings.json') return false;
+      if (pendingDeletions.has(String(e.path_lower).toLowerCase())) return false;
+      return true;
+    });
     // Construir mapa inverso path → metadatos cacheados para saltar descargas sin cambios
     const cachedByPath = new Map();
     Object.entries(dropboxPerListMeta).forEach(([id, m]) => {
