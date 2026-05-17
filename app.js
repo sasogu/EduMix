@@ -3409,11 +3409,40 @@ function clearSearchResults() {
   }
 }
 
+function highlightMatch(text, query) {
+  if (!query || !text) return document.createTextNode(text || '');
+  const idx = text.toLowerCase().indexOf(query.toLowerCase());
+  if (idx === -1) return document.createTextNode(text);
+  const frag = document.createDocumentFragment();
+  if (idx > 0) frag.appendChild(document.createTextNode(text.slice(0, idx)));
+  const mark = document.createElement('mark');
+  mark.textContent = text.slice(idx, idx + query.length);
+  frag.appendChild(mark);
+  if (idx + query.length < text.length) frag.appendChild(document.createTextNode(text.slice(idx + query.length)));
+  return frag;
+}
+
+function renderResultStars(rating) {
+  const n = Math.round(Number(rating) || 0);
+  if (!n) return null;
+  const span = document.createElement('span');
+  span.className = 'result-stars';
+  span.setAttribute('aria-label', `${n} estrella${n !== 1 ? 's' : ''}`);
+  span.textContent = '★'.repeat(n) + '☆'.repeat(5 - n);
+  return span;
+}
+
 function performGlobalSearch(query) {
   if (!searchResultsEl) return;
   const q = (query || '').trim().toLowerCase();
+
+  // Remove old count/empty nodes (siblings of searchResultsEl)
+  const container = searchResultsEl.parentElement;
+  container?.querySelectorAll('.search-count, .search-empty').forEach(el => el.remove());
   searchResultsEl.innerHTML = '';
+
   if (!q) return;
+
   const results = [];
   for (const playlist of state.playlists) {
     if (playlist.isAuto) continue;
@@ -3430,29 +3459,64 @@ function performGlobalSearch(query) {
     }
     if (results.length >= 100) break;
   }
+
+  if (results.length === 0) {
+    const empty = document.createElement('p');
+    empty.className = 'search-empty';
+    empty.textContent = `Sin resultados para "${query.trim()}"`;
+    searchResultsEl.before(empty);
+    return;
+  }
+
+  const countEl = document.createElement('p');
+  countEl.className = 'search-count';
+  countEl.textContent = results.length >= 100
+    ? '100+ resultados (muestra los primeros 100)'
+    : `${results.length} resultado${results.length !== 1 ? 's' : ''}`;
+  searchResultsEl.before(countEl);
+
   for (const r of results) {
     const li = document.createElement('li');
     li.className = 'search-result';
     li.dataset.playlistId = r.playlistId;
     li.dataset.index = String(r.index);
 
+    // Cover thumbnail
+    const cover = document.createElement('img');
+    cover.className = 'result-cover';
+    cover.alt = '';
+    cover.src = r.track.coverUrl || getPlaceholderCover(40);
+
+    // Info column
     const info = document.createElement('div');
     info.className = 'result-info';
+
     const title = document.createElement('strong');
-    title.textContent = getTrackDisplayTitle(r.track) || 'Pista';
+    const displayTitle = getTrackDisplayTitle(r.track) || 'Pista';
+    title.appendChild(highlightMatch(displayTitle, q));
     appendFavoriteIndicator(title, r.track);
+
     const meta = document.createElement('span');
     meta.className = 'result-meta';
-    const metaBits = [];
     const artistName = getTrackArtist(r.track);
+    const metaBits = [];
     if (artistName) metaBits.push(artistName);
-    metaBits.push(`${r.playlistName} • #${r.index + 1}`);
-    if (Number.isFinite(r.track.duration)) {
-      metaBits.push(formatDuration(r.track.duration));
+    metaBits.push(`${r.playlistName} · #${r.index + 1}`);
+    if (Number.isFinite(r.track.duration)) metaBits.push(formatDuration(r.track.duration));
+    if (artistName && q && artistName.toLowerCase().includes(q)) {
+      const artistFrag = document.createDocumentFragment();
+      artistFrag.appendChild(highlightMatch(artistName, q));
+      artistFrag.appendChild(document.createTextNode(` · ${r.playlistName} · #${r.index + 1}${Number.isFinite(r.track.duration) ? ' · ' + formatDuration(r.track.duration) : ''}`));
+      meta.appendChild(artistFrag);
+    } else {
+      meta.textContent = metaBits.join(' · ');
     }
-    meta.textContent = metaBits.join(' • ');
-    info.append(title, meta);
 
+    const stars = renderResultStars(r.track.rating);
+    info.append(title, meta);
+    if (stars) info.append(stars);
+
+    // Actions column
     const actions = document.createElement('div');
     actions.className = 'result-actions';
     const playBtn = document.createElement('button');
@@ -3469,7 +3533,7 @@ function performGlobalSearch(query) {
     revealBtn.dataset.action = 'reveal';
     actions.append(playBtn, revealBtn);
 
-    li.append(info, actions);
+    li.append(cover, info, actions);
     searchResultsEl.append(li);
   }
 }

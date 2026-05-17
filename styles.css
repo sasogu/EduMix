@@ -362,8 +362,64 @@ button.danger:not(:disabled):hover {
 }
 
 /* ===== Búsqueda ===== */
+#searchSection {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+#searchSection h2 {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+#searchSection h2::before {
+  content: '🔍';
+  font-size: 1em;
+}
+
+#globalSearch {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.75rem 1rem 0.75rem 2.6rem;
+  border: 1.5px solid var(--border-strong);
+  border-radius: 2rem;
+  background: var(--card-subtle)
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='11' cy='11' r='8'/%3E%3Cline x1='21' y1='21' x2='16.65' y2='16.65'/%3E%3C/svg%3E")
+    no-repeat 0.85rem center;
+  color: var(--text);
+  font: inherit;
+  font-size: 1rem;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+#globalSearch::placeholder {
+  color: var(--text-secondary);
+  opacity: 0.75;
+}
+
+#globalSearch:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(74, 144, 226, 0.18);
+}
+
+.search-count {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  padding: 0 0.25rem;
+}
+
+.search-empty {
+  text-align: center;
+  padding: 1.5rem 1rem;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+}
+
 #searchResults {
-  margin: 0.6rem 0 0;
+  margin: 0;
   padding: 0;
   list-style: none;
   display: grid;
@@ -372,27 +428,36 @@ button.danger:not(:disabled):hover {
 
 .search-result {
   display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 0.6rem;
+  grid-template-columns: 2.5rem 1fr auto;
+  gap: 0.65rem;
   align-items: center;
-  padding: 0.65rem 0.9rem;
+  padding: 0.6rem 0.75rem;
   border-radius: 0.75rem;
   border: 1px solid var(--border);
   background: var(--card-subtle);
   cursor: pointer;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease, background 0.15s ease;
 }
 
 .search-result:hover {
   border-color: var(--primary);
-  box-shadow: 0 2px 8px rgba(74, 144, 226, 0.15);
+  background: var(--bg);
+  box-shadow: 0 2px 10px rgba(74, 144, 226, 0.15);
+}
+
+.result-cover {
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: 0.4rem;
+  object-fit: cover;
+  flex-shrink: 0;
 }
 
 .result-info {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 0.1rem;
+  gap: 0.15rem;
 }
 
 .result-info strong {
@@ -402,14 +467,38 @@ button.danger:not(:disabled):hover {
   white-space: nowrap;
 }
 
+.result-info strong mark {
+  background: rgba(74, 144, 226, 0.2);
+  color: var(--primary);
+  border-radius: 0.2rem;
+  padding: 0 0.1em;
+}
+
 .result-meta {
-  font-size: 0.8rem;
+  font-size: 0.78rem;
   color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.result-meta mark {
+  background: rgba(74, 144, 226, 0.15);
+  color: var(--primary);
+  border-radius: 0.2rem;
+  padding: 0 0.1em;
+}
+
+.result-stars {
+  color: #f59e0b;
+  font-size: 0.72rem;
+  letter-spacing: -0.05em;
 }
 
 .result-actions {
   display: inline-flex;
-  gap: 0.4rem;
+  gap: 0.35rem;
+  flex-shrink: 0;
 }
 
 /* ===== Pistas ===== */
@@ -1441,6 +1530,16 @@ footer {
 
 :root[data-theme="dark"] select {
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%239ca3af' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+}
+
+:root[data-theme="dark"] #globalSearch {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='%239ca3af' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='11' cy='11' r='8'/%3E%3Cline x1='21' y1='21' x2='16.65' y2='16.65'/%3E%3C/svg%3E");
+}
+
+:root[data-theme="dark"] .result-info strong mark,
+:root[data-theme="dark"] .result-meta mark {
+  background: rgba(88, 166, 255, 0.22);
+  color: #58a6ff;
 }
 
 /* ===== Botón cargando pista remota ===== */
