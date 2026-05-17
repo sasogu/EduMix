@@ -3033,7 +3033,6 @@ function updateNowPlaying() {
   }
   const displayTitle = getTrackDisplayTitle(track);
   nowPlayingEl.textContent = displayTitle || 'Pista';
-  appendFavoriteIndicator(nowPlayingEl, track);
   const tooltipParts = [];
   if (track.isFavorite) tooltipParts.push('Favorita');
   const artist = getTrackArtist(track);
