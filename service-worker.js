@@ -15,7 +15,6 @@ const APP_SHELL = [
   './modules/track-crud.js',
   './modules/track-utils.js',
   './modules/waveform-ui.js',
-  './manifest.webmanifest',
   './icons/icon-192.png',
   './icons/icon-512.png',
 ];
@@ -119,6 +118,15 @@ self.addEventListener('fetch', event => {
 
   if (url.origin !== self.location.origin) {
     // No controlar peticiones externas: deja que el navegador gestione
+    return;
+  }
+
+  // El manifest siempre se pide en red para que el navegador vea el nombre actual
+  // y no muestre el prompt de cambio de nombre en cada sesión.
+  if (url.pathname.endsWith('/manifest.webmanifest') || url.pathname.endsWith('/manifest.json')) {
+    event.respondWith(
+      fetch(request).catch(() => caches.match(request))
+    );
     return;
   }
 
