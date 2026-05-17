@@ -109,6 +109,10 @@
         <h2>Lista de reproducción</h2>
         <div class="section-actions">
           <select id="playlistPicker" aria-label="Selecciona una lista"></select>
+          <button id="playlistPickerBtn" class="playlist-picker-btn" type="button" aria-haspopup="dialog" aria-expanded="false">
+            <span id="playlistPickerLabel">Lista</span>
+            <span class="picker-arrow" aria-hidden="true">▾</span>
+          </button>
           <select id="pageSizeSelect" aria-label="Tamaño de página">
             <option value="0">Todas</option>
             <option value="10">10</option>
@@ -225,6 +229,18 @@
         <button id="appDialogCancel" type="button" class="ghost">Cancelar</button>
         <button id="appDialogConfirm" type="button">Aceptar</button>
       </div>
+    </div>
+  </div>
+
+  <!-- Bottom sheet selector de listas (móvil) -->
+  <div id="playlistSheet" class="playlist-sheet" role="dialog" aria-modal="true" aria-label="Seleccionar lista" hidden>
+    <div class="playlist-sheet-backdrop"></div>
+    <div class="playlist-sheet-panel">
+      <div class="playlist-sheet-header">
+        <span class="playlist-sheet-title">Lista de reproducción</span>
+        <button id="playlistSheetClose" type="button" class="ghost icon-button" aria-label="Cerrar">✕</button>
+      </div>
+      <ul id="playlistSheetList" class="playlist-sheet-list" role="listbox" aria-label="Listas de reproducción"></ul>
     </div>
   </div>
 </body>

@@ -20,6 +20,12 @@ const nowPlayingEl = document.getElementById('nowPlaying');
 const timeDisplayEl = document.getElementById('timeDisplay');
 const clearPlaylistBtn = document.getElementById('clearPlaylist');
 const playlistPicker = document.getElementById('playlistPicker');
+const playlistPickerBtn = document.getElementById('playlistPickerBtn');
+const playlistPickerLabel = document.getElementById('playlistPickerLabel');
+const playlistSheet = document.getElementById('playlistSheet');
+const playlistSheetList = document.getElementById('playlistSheetList');
+const playlistSheetClose = document.getElementById('playlistSheetClose');
+const playlistSheetBackdrop = playlistSheet?.querySelector('.playlist-sheet-backdrop');
 const pageSizeSelect = document.getElementById('pageSizeSelect');
 const sortSelect = document.getElementById('sortSelect');
 const minRatingSelect = document.getElementById('minRatingSelect');
@@ -643,6 +649,31 @@ function renderPlaylistPicker() {
   const targetValue = state.activePlaylistId || previous || (state.playlists[0] && state.playlists[0].id) || '';
   playlistPicker.value = targetValue;
   playlistPicker.disabled = state.playlists.length <= 1;
+  // Sincronizar botón y sheet móvil
+  const activePl = state.playlists.find(p => p.id === targetValue);
+  if (playlistPickerLabel) {
+    playlistPickerLabel.textContent = activePl ? (activePl.isAuto ? `${activePl.name} (auto)` : activePl.name) : 'Lista';
+  }
+  if (playlistSheetList) {
+    playlistSheetList.innerHTML = '';
+    state.playlists.forEach(playlist => {
+      const li = document.createElement('li');
+      li.role = 'option';
+      li.setAttribute('aria-selected', playlist.id === targetValue ? 'true' : 'false');
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'playlist-sheet-item' + (playlist.id === targetValue ? ' is-active' : '');
+      btn.dataset.playlistId = playlist.id;
+      const check = document.createElement('span');
+      check.className = 'playlist-sheet-item-check';
+      check.textContent = playlist.id === targetValue ? '✓' : '';
+      const label = document.createElement('span');
+      label.textContent = playlist.isAuto ? `${playlist.name} (auto)` : playlist.name;
+      btn.append(check, label);
+      li.append(btn);
+      playlistSheetList.append(li);
+    });
+  }
   // Al actualizar el selector, intenta aplicar la vista específica de esa lista
   try { loadActiveViewPrefs(); } catch {}
   if (pageSizeSelect) {
@@ -1612,6 +1643,37 @@ clearPlaylistBtn?.addEventListener('click', async () => {
 playlistPicker?.addEventListener('change', event => {
   const nextId = event.target.value;
   setActivePlaylist(nextId);
+});
+
+// Bottom sheet selector de listas (móvil)
+function openPlaylistSheet() {
+  if (!playlistSheet) return;
+  playlistSheet.hidden = false;
+  playlistPickerBtn?.setAttribute('aria-expanded', 'true');
+  document.body.style.overflow = 'hidden';
+  playlistSheetList?.querySelector('.playlist-sheet-item.is-active')?.focus();
+}
+function closePlaylistSheet() {
+  if (!playlistSheet) return;
+  playlistSheet.hidden = true;
+  playlistPickerBtn?.setAttribute('aria-expanded', 'false');
+  document.body.style.overflow = '';
+  playlistPickerBtn?.focus();
+}
+playlistPickerBtn?.addEventListener('click', openPlaylistSheet);
+playlistSheetClose?.addEventListener('click', closePlaylistSheet);
+playlistSheetBackdrop?.addEventListener('click', closePlaylistSheet);
+playlistSheetList?.addEventListener('click', event => {
+  const btn = event.target.closest('.playlist-sheet-item');
+  if (!btn) return;
+  const id = btn.dataset.playlistId;
+  if (id) {
+    setActivePlaylist(id);
+    closePlaylistSheet();
+  }
+});
+playlistSheet?.addEventListener('keydown', event => {
+  if (event.key === 'Escape') closePlaylistSheet();
 });
 
 newPlaylistBtn?.addEventListener('click', async () => {
