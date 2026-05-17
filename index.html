@@ -63,7 +63,9 @@
         <canvas id="waveformCanvas" height="160" role="img" aria-label="Forma de onda de la pista"></canvas>
         <div id="waveformMessage">Selecciona una pista para visualizar su forma de onda.</div>
       </div>
-      <!-- Controles principales reorganizados para tablets -->
+      <!-- Controles avanzados: colapsables en móvil -->
+      <details class="advanced-controls-details">
+        <summary class="advanced-controls-summary">⚙ Controles avanzados</summary>
       <div class="main-controls">
         <div class="control-row">
           <label class="fade-control">
@@ -104,44 +106,53 @@
           </div>
         </div>
       </div>
+      </details>
     </section>
     <section class="card" id="playlistSection">
       <div class="section-heading">
         <h2>Lista de reproducción</h2>
         <div class="section-actions">
-          <select id="playlistPicker" aria-label="Selecciona una lista"></select>
-          <button id="playlistPickerBtn" class="playlist-picker-btn" type="button" aria-haspopup="dialog" aria-expanded="false">
-            <span id="playlistPickerLabel">Lista</span>
-            <span class="picker-arrow" aria-hidden="true">▾</span>
-          </button>
-          <select id="pageSizeSelect" aria-label="Tamaño de página">
-            <option value="0">Todas</option>
-            <option value="10">10</option>
-            <option value="25">25</option>
-            <option value="50">50</option>
-            <option value="100">100</option>
-          </select>
-          <select id="minRatingSelect" aria-label="Mínimo de estrellas">
-            <option value="0">★ 0+</option>
-            <option value="1">★ 1+</option>
-            <option value="2">★ 2+</option>
-            <option value="3">★ 3+</option>
-            <option value="4">★ 4+</option>
-            <option value="5">★ 5</option>
-          </select>
-          <select id="sortSelect" aria-label="Ordenar por">
-            <option value="none">Orden por defecto</option>
-            <option value="name-asc">A → Z</option>
-            <option value="name-desc">Z → A</option>
-            <option value="rating-desc">⭐ Alta → baja</option>
-            <option value="rating-asc">⭐ Baja → alta</option>
-          </select>
-          <button id="newPlaylist" class="ghost icon-button" title="Nueva lista" aria-label="Nueva lista">＋</button>
-          <button id="renamePlaylist" class="ghost icon-button" title="Renombrar lista" aria-label="Renombrar lista">✎</button>
-          <button id="deletePlaylist" class="ghost icon-button" title="Eliminar lista" aria-label="Eliminar lista">🗑</button>
-          <button id="clearPlaylist" class="ghost icon-button" title="Vaciar lista" aria-label="Vaciar lista">🧹</button>
-          <button id="selectAllForSync" class="ghost" title="Seleccionar todas las pistas de esta lista" aria-label="Seleccionar todas">Seleccionar todo</button>
-          <button id="clearSelectedForSync" class="ghost" title="Quitar selección de esta lista" aria-label="Quitar selección">Quitar selección</button>
+          <!-- Selector de lista + gestión -->
+          <div class="playlist-picker-row">
+            <select id="playlistPicker" aria-label="Selecciona una lista"></select>
+            <button id="playlistPickerBtn" class="playlist-picker-btn" type="button" aria-haspopup="dialog" aria-expanded="false">
+              <span id="playlistPickerLabel">Lista</span>
+              <span class="picker-arrow" aria-hidden="true">▾</span>
+            </button>
+            <div class="playlist-mgmt-actions">
+              <button id="newPlaylist" class="ghost icon-button" title="Nueva lista" aria-label="Nueva lista">＋</button>
+              <button id="renamePlaylist" class="ghost icon-button" title="Renombrar lista" aria-label="Renombrar lista">✎</button>
+              <button id="deletePlaylist" class="ghost icon-button" title="Eliminar lista" aria-label="Eliminar lista">🗑</button>
+              <button id="clearPlaylist" class="ghost icon-button" title="Vaciar lista" aria-label="Vaciar lista">🧹</button>
+            </div>
+          </div>
+          <!-- Filtros -->
+          <div class="playlist-filter-actions">
+            <select id="pageSizeSelect" aria-label="Tamaño de página">
+              <option value="0">Todas</option>
+              <option value="10">10</option>
+              <option value="25">25</option>
+              <option value="50">50</option>
+              <option value="100">100</option>
+            </select>
+            <select id="minRatingSelect" aria-label="Mínimo de estrellas">
+              <option value="0">★ 0+</option>
+              <option value="1">★ 1+</option>
+              <option value="2">★ 2+</option>
+              <option value="3">★ 3+</option>
+              <option value="4">★ 4+</option>
+              <option value="5">★ 5</option>
+            </select>
+            <select id="sortSelect" aria-label="Ordenar por">
+              <option value="none">Orden por defecto</option>
+              <option value="name-asc">A → Z</option>
+              <option value="name-desc">Z → A</option>
+              <option value="rating-desc">⭐ Alta → baja</option>
+              <option value="rating-asc">⭐ Baja → alta</option>
+            </select>
+            <button id="selectAllForSync" class="ghost" title="Seleccionar todas las pistas de esta lista" aria-label="Seleccionar todas">Seleccionar todo</button>
+            <button id="clearSelectedForSync" class="ghost" title="Quitar selección de esta lista" aria-label="Quitar selección">Quitar selección</button>
+          </div>
         </div>
       </div>
       <ul id="playlist" aria-live="polite"></ul>
