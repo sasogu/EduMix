@@ -192,6 +192,7 @@ const state = {
   tracks: [],
   currentIndex: -1,
   isPlaying: false,
+  isLoadingTrack: false,
   fadeDuration: Number(fadeSlider?.value ?? 3),
   autoLoop: Boolean(loopToggle?.checked),
   shuffle: false,
@@ -2685,20 +2686,37 @@ async function playTrack(index, options = {}) {
 
   // Selección de fuente según preferencia
   let ready = false;
-  if (state.preferLocalSource) {
-    ready = await ensureLocalTrackUrl(track);
-    if (!ready && track.dropboxPath) {
-      ready = await ensureTrackRemoteLink(track);
-    }
-  } else {
-    if (track.dropboxPath) {
-      ready = await ensureTrackRemoteLink(track);
-      if (!ready) {
-        ready = await ensureLocalTrackUrl(track);
+  const needsRemote = track.dropboxPath && !track.url;
+  if (needsRemote) {
+    state.isLoadingTrack = true;
+    updateControls();
+    schedulePlaylistRender();
+  }
+  try {
+    if (state.preferLocalSource) {
+      ready = await ensureLocalTrackUrl(track);
+      if (!ready && track.dropboxPath) {
+        if (!needsRemote) {
+          state.isLoadingTrack = true;
+          updateControls();
+          schedulePlaylistRender();
+        }
+        ready = await ensureTrackRemoteLink(track);
       }
     } else {
-      ready = await ensureLocalTrackUrl(track);
+      if (track.dropboxPath) {
+        ready = await ensureTrackRemoteLink(track);
+        if (!ready) {
+          ready = await ensureLocalTrackUrl(track);
+        }
+      } else {
+        ready = await ensureLocalTrackUrl(track);
+      }
     }
+  } finally {
+    state.isLoadingTrack = false;
+    updateControls();
+    schedulePlaylistRender();
   }
   if (!ready) {
     if (waveformContainer) {
@@ -2969,8 +2987,15 @@ function updateControls() {
   const activePlaylist = getActivePlaylist();
   const activeIsAuto = !!activePlaylist?.isAuto;
   const nonAutoCount = state.playlists.filter(pl => !pl.isAuto).length;
-  togglePlayBtn.disabled = !state.tracks.length;
-  togglePlayBtn.textContent = state.isPlaying ? 'Pausar' : 'Reproducir';
+  if (state.isLoadingTrack) {
+    togglePlayBtn.disabled = true;
+    togglePlayBtn.textContent = 'Cargando…';
+    togglePlayBtn.classList.add('is-loading');
+  } else {
+    togglePlayBtn.disabled = !state.tracks.length;
+    togglePlayBtn.textContent = state.isPlaying ? 'Pausar' : 'Reproducir';
+    togglePlayBtn.classList.remove('is-loading');
+  }
   if (state.shuffle) {
     prevTrackBtn.disabled = shuffleHistory.length === 0;
     nextTrackBtn.disabled = state.tracks.length <= 1;
@@ -3193,8 +3218,15 @@ function renderPlaylist() {
     playButton.className = 'ghost icon-button';
     playButton.type = 'button';
     const isPlayingTrack = index === state.currentIndex && state.isPlaying;
-    playButton.textContent = isPlayingTrack ? '♪' : '▶';
-    playButton.title = isPlayingTrack ? 'Reproduciendo' : 'Reproducir';
+    const isLoadingThisTrack = index === state.currentIndex && state.isLoadingTrack;
+    if (isLoadingThisTrack) {
+      playButton.textContent = '…';
+      playButton.title = 'Cargando…';
+      playButton.classList.add('is-loading');
+    } else {
+      playButton.textContent = isPlayingTrack ? '♪' : '▶';
+      playButton.title = isPlayingTrack ? 'Reproduciendo' : 'Reproducir';
+    }
     playButton.setAttribute('aria-label', playButton.title);
     playButton.dataset.action = 'play';
     playButton.dataset.index = String(index);
