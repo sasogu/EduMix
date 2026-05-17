@@ -42,7 +42,6 @@ export function createTrackDataHelpers(deps) {
       dropboxRev: track.dropboxRev ?? null,
       dropboxSize: track.dropboxSize ?? null,
       dropboxUpdatedAt: track.dropboxUpdatedAt ?? null,
-      waveform: track.waveform ?? null,
       waveformStatus: track.waveformStatus ?? null,
     };
   }
@@ -93,7 +92,7 @@ export function createTrackDataHelpers(deps) {
       dropboxRev: entry.dropboxRev ?? null,
       dropboxSize: entry.dropboxSize ?? null,
       dropboxUpdatedAt: entry.dropboxUpdatedAt ?? null,
-      waveform: entry.waveform ?? null,
+      waveform: null,
       waveformStatus: entry.waveformStatus ?? null,
       urlExpiresAt: 0,
       isRemote: Boolean(entry.dropboxPath),
