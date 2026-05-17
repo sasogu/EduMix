@@ -5939,12 +5939,15 @@ async function ensureCoverArt(track) {
         const sliceSize = Math.min(stored.buffer.byteLength, COVER_ART_MAX_SOURCE_BYTES);
         buffer = stored.buffer.slice(0, sliceSize);
       } else if ((track.isRemote || track.dropboxPath)) {
-        // Evitar tormenta de peticiones si hay backoff o concurrencia llena
+        // Evitar tormenta de peticiones si hay backoff, concurrencia llena o cooldown de error
         const now = Date.now();
         if ((now < dropboxReadAvailableAt) || dropboxReadInFlight >= DROPBOX_READ_CONCURRENCY) {
           return false;
         }
         if (remoteLinkInFlight.has(track.id)) {
+          return false;
+        }
+        if (track._remoteRetryAt && now < track._remoteRetryAt) {
           return false;
         }
         const ready = await ensureTrackRemoteLink(track);
@@ -6427,7 +6430,7 @@ async function initialize() {
   // Lightbox handlers
   // Reparar nombres con mojibake usando ID3 si es posible
   try {
-    const broken = allTracks.filter(t => isNameMojibake(t.name || ''));
+    const broken = allTracks.filter(t => isNameMojibake(t.name || '') && !t.isRemote && !t.dropboxPath);
     if (broken.length) {
       broken.forEach(t => { ensureCoverArt(t).catch(() => {}); });
     }
