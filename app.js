@@ -2463,16 +2463,19 @@ function addTracks(files) {
 
 function readDuration(track) {
   const probe = document.createElement('audio');
-  probe.src = track.url;
   probe.preload = 'metadata';
+  const cleanup = () => { probe.src = ''; probe.load(); };
   probe.addEventListener('loadedmetadata', () => {
     track.duration = probe.duration;
     if (waveformState.trackId === track.id) {
       waveformState.duration = track.duration;
     }
+    cleanup();
     schedulePlaylistRender();
     persistLocalPlaylist();
   }, { once: true });
+  probe.addEventListener('error', cleanup, { once: true });
+  probe.src = track.url;
 }
 
 async function copyTrackToPlaylist(index) {
