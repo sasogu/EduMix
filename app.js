@@ -2637,18 +2637,25 @@ async function ensureTrackRemoteLink(track) {
     const msg = String(error?.message || '');
     const status = Number(error?.responseStatus || 0);
     if (/not_found/i.test(msg) || status === 409) {
-      // El archivo no existe en Dropbox (o conflicto al consultar). Pasar a modo local y re-encolar subida.
-      track.dropboxPath = null;
-      track.dropboxRev = null;
-      track.dropboxSize = null;
-      track.dropboxUpdatedAt = null;
-      track.isRemote = false;
-      track.urlExpiresAt = 0;
-      track._sync = 'queued';
-      persistLocalPlaylist();
-      updateDropboxUI();
-      requestDropboxSync({ loadRemote: false, onlyTrackIds: [track.id] });
-      showDropboxError('Archivo no encontrado en Dropbox. Re-subiendo desde copia local.');
+      // El archivo no existe en Dropbox. Solo borrar dropboxPath si hay copia local confirmada;
+      // si no, solo poner un cooldown para no reintentar en cada render.
+      const hasLocalCopy = pendingUploads.has(track.id);
+      if (hasLocalCopy) {
+        track.dropboxPath = null;
+        track.dropboxRev = null;
+        track.dropboxSize = null;
+        track.dropboxUpdatedAt = null;
+        track.isRemote = false;
+        track.urlExpiresAt = 0;
+        track._sync = 'queued';
+        persistLocalPlaylist();
+        updateDropboxUI();
+        requestDropboxSync({ loadRemote: false, onlyTrackIds: [track.id] });
+        showDropboxError('Archivo no encontrado en Dropbox. Re-subiendo desde copia local.');
+      } else {
+        // Sin copia local: conservar dropboxPath pero pausar reintentos 5 minutos.
+        track._remoteRetryAt = Date.now() + 5 * 60 * 1000;
+      }
     } else {
       showDropboxError('No se pudo obtener el audio desde Dropbox.');
     }
@@ -3267,8 +3274,9 @@ function renderPlaylist() {
     item.append(handle, thumb, title, actions);
     playlistEl.append(item);
 
-    // Intento de generar miniatura si no existe aún (usa local o remoto según políticas)
-    if (!track.coverUrl) {
+    // Carátula solo para pistas con copia local. Las remotas sin URL local
+    // la cargarán al reproducirse para no disparar get_temporary_link en cada render.
+    if (!track.coverUrl && (track.url?.startsWith('blob:') || pendingUploads.has(track.id))) {
       ensureCoverArt(track)
         .then(changed => { if (changed) updateTrackThumbnails(track); })
         .catch(() => {});
