@@ -1255,8 +1255,12 @@ footer {
 .advanced-controls-summary {
   display: none; /* oculto en escritorio: los controles siempre visibles */
 }
-.advanced-controls-details > .main-controls {
-  display: block;
+
+/* Escritorio: forzar siempre visible independientemente del estado open/closed */
+@media (min-width: 721px) {
+  .advanced-controls-details > .main-controls {
+    display: block;
+  }
 }
 
 /* ===== Grupos de section-actions (escritorio) ===== */
