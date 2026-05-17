@@ -70,6 +70,7 @@ const progressHandle = document.getElementById('progressHandle');
 const toggleWaveformBtn = document.getElementById('toggleWaveform');
 const coverArtImg = document.getElementById('coverArt');
 const nowRatingEl = document.getElementById('nowRating');
+const nowFavoriteBtn = document.getElementById('nowFavoriteBtn');
 const appVersionEl = document.getElementById('appVersion');
 const nowPlayingSectionEl = document.getElementById('nowPlayingSection');
 const nowPlayingRowEl = document.querySelector('.now-playing-row');
@@ -6163,8 +6164,16 @@ function updateNowRatingUI(trackOverride = null) {
     const val = idx + 1;
     btn.textContent = val <= rating ? '★' : '☆';
     btn.setAttribute('aria-pressed', val <= rating ? 'true' : 'false');
-    btn.disabled = !!trackOverride; // Deshabilitar si es override (no pertenece a la lista actual)
+    btn.disabled = !!trackOverride;
   });
+  if (nowFavoriteBtn) {
+    const fav = !!track.isFavorite;
+    nowFavoriteBtn.textContent = fav ? '❤️' : '🤍';
+    nowFavoriteBtn.setAttribute('aria-pressed', fav ? 'true' : 'false');
+    nowFavoriteBtn.title = fav ? 'Quitar de favoritos' : 'Añadir a favoritos';
+    nowFavoriteBtn.setAttribute('aria-label', nowFavoriteBtn.title);
+    nowFavoriteBtn.disabled = !!trackOverride;
+  }
 }
 
 function openCoverLightbox(src) {
@@ -6582,6 +6591,13 @@ async function initialize() {
     const val = Number(btn.dataset.value) || 0;
     if (state.currentIndex >= 0) {
       setTrackRating(state.currentIndex, val);
+      updateNowRatingUI();
+    }
+  });
+
+  nowFavoriteBtn?.addEventListener('click', () => {
+    if (state.currentIndex >= 0) {
+      toggleTrackFavorite(state.currentIndex);
       updateNowRatingUI();
     }
   });
