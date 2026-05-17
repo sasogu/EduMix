@@ -4972,7 +4972,7 @@ async function saveDropboxPlaylist(token) {
       autoType: playlist.autoType || null,
     })),
   };
-  const body = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const body = new Blob([JSON.stringify(payload)], { type: 'application/json' });
   const maxRetries = 5;
   let attempt = 0;
   while (attempt <= maxRetries) {
@@ -5051,7 +5051,7 @@ async function saveDropboxPlaylist(token) {
 
 // Guardar con un payload ya preparado (usado tras un merge)
 async function saveDropboxPlaylistWithPayload(token, payload, rev) {
-  const body = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const body = new Blob([JSON.stringify(payload)], { type: 'application/json' });
   const response = await fetch('https://content.dropboxapi.com/2/files/upload', {
     method: 'POST',
     headers: {
@@ -6509,22 +6509,31 @@ async function pullDropboxPlaylistsPerList(token) {
     const listing = await response.json();
     const entries = Array.isArray(listing?.entries) ? listing.entries : [];
     const jsonFiles = entries.filter(e => e['.tag'] === 'file' && typeof e?.path_lower === 'string' && e.name.toLowerCase().endsWith('.json') && e.name !== '_settings.json');
-    const downloaded = [];
-    for (const file of jsonFiles) {
-      const path = file.path_lower || file.path_display;
+    // Construir mapa inverso path → metadatos cacheados para saltar descargas sin cambios
+    const cachedByPath = new Map();
+    Object.entries(dropboxPerListMeta).forEach(([id, m]) => {
+      if (m?.path) cachedByPath.set(String(m.path).toLowerCase(), { id, serverModified: m.serverModified, rev: m.rev });
+    });
+
+    const downloaded = (await Promise.all(jsonFiles.map(async (file) => {
+      const path = file.path_lower || String(file.path_display || '').toLowerCase();
+      // Si el archivo no cambió desde la última descarga, saltar la petición
+      const cached = cachedByPath.get(path);
+      if (cached?.serverModified && cached.serverModified === file.server_modified) {
+        const localPl = state.playlists.find(p => p.id === cached.id);
+        if (localPl) return null; // ya en sync, el merge lo omitirá
+      }
       const resp = await fetch('https://content.dropboxapi.com/2/files/download', {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}`, 'Dropbox-API-Arg': JSON.stringify({ path }) },
       });
-      if (!resp.ok) continue;
+      if (!resp.ok) return null;
       const metaHeader = resp.headers.get('dropbox-api-result');
       let meta = {};
       try { meta = JSON.parse(metaHeader || '{}'); } catch {}
       const doc = await resp.json().catch(() => null);
-      if (doc && doc.id) {
-        downloaded.push({ path, meta, doc });
-      }
-    }
+      return (doc && doc.id) ? { path, meta, doc } : null;
+    }))).filter(Boolean);
     const mapLocalTracks = new Map();
     const mapLocalPlaylistMeta = new Map();
     state.playlists.forEach(pl => {
@@ -6711,10 +6720,14 @@ async function saveDropboxPlaylistsPerList(token) {
       updatedAt: pl.updatedAt ?? Date.now(),
       tracks: pl.tracks.map(serializeTrack),
     };
-    const body = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
     const desiredPath = getPlaylistPath(pl);
     const meta = dropboxPerListMeta[pl.id] || { path: desiredPath, rev: null };
     const pathChanged = meta.path && meta.path !== desiredPath;
+    // Saltar si la lista no cambió desde la última subida confirmada
+    if (!pathChanged && meta.rev && meta.savedUpdatedAt === pl.updatedAt) {
+      continue;
+    }
+    const body = new Blob([JSON.stringify(payload)], { type: 'application/json' });
     const lcDesired = String(desiredPath).toLowerCase();
     const lcPrev = String(meta.path || '').toLowerCase();
     // Si solo cambió el nombre (ruta), intenta un rename/move una vez
@@ -6809,7 +6822,7 @@ async function saveDropboxPlaylistsPerList(token) {
           throw new Error(text || 'Upload failed');
         }
         const metaJson = await response.json();
-        dropboxPerListMeta[pl.id] = { path: desiredPath, rev: metaJson.rev || null, serverModified: metaJson.server_modified || null };
+        dropboxPerListMeta[pl.id] = { path: desiredPath, rev: metaJson.rev || null, serverModified: metaJson.server_modified || null, savedUpdatedAt: pl.updatedAt };
         // Si no se pudo mover antes y el path antiguo persiste diferente (no sólo por mayúsculas/minúsculas), programar borrado
         if (pathChanged && meta.path && (lcDesired !== lcPrev)) {
           pendingDeletions.add(lcPrev);
@@ -6839,7 +6852,7 @@ async function saveDropboxSettings(token) {
     autoSync: !!state.autoSync,
     eqBoost: ensureEqState(),
   };
-  const body = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const body = new Blob([JSON.stringify(payload)], { type: 'application/json' });
   const response = await fetch('https://content.dropboxapi.com/2/files/upload', {
     method: 'POST',
     headers: {
