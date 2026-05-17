@@ -110,6 +110,10 @@ const metadataLookupWaiters = [];
 let metadataLookupAvailableAt = 0;
 
 const AUTO_PLAYLISTS = {
+  allTracks: {
+    id: 'auto-all-tracks',
+    name: 'Todas las pistas 🎵',
+  },
   favorites: {
     id: 'auto-favorites',
     name: 'Favoritas ⭐',
@@ -544,6 +548,7 @@ function getAutoPlaylistByType(type) {
 
 function ensureAutoPlaylists() {
   try {
+    ensureAllTracksPlaylist();
     ensureFavoritesPlaylist();
   } catch (error) {
     console.warn('No se pudo asegurar la lista automática', error);
@@ -582,6 +587,42 @@ function refreshFavoritesPlaylist({ force = false } = {}) {
     }
   }
   playlist.tracks.splice(0, playlist.tracks.length, ...favorites);
+  playlist.updatedAt = Date.now();
+  if (state.activePlaylistId === playlist.id) {
+    state.tracks = playlist.tracks;
+    schedulePlaylistRender();
+    updateControls();
+  }
+}
+
+function ensureAllTracksPlaylist() {
+  const config = AUTO_PLAYLISTS.allTracks;
+  if (!config) return;
+  let playlist = getAutoPlaylistByType('allTracks');
+  if (!playlist) {
+    playlist = createPlaylistObject(config.name, [], { id: config.id, isAuto: true, autoType: 'allTracks' });
+    state.playlists.unshift(playlist);
+  } else if (playlist.name !== config.name) {
+    playlist.name = config.name;
+  }
+  refreshAllTracksPlaylist({ force: true });
+}
+
+function refreshAllTracksPlaylist({ force = false } = {}) {
+  const playlist = getAutoPlaylistByType('allTracks');
+  if (!playlist) return;
+  const seen = new Set();
+  const all = [];
+  for (const track of getAllTracks({ includeAuto: false })) {
+    if (!track || seen.has(track.id)) continue;
+    all.push(track);
+    seen.add(track.id);
+  }
+  if (!force) {
+    const currentIds = playlist.tracks.map(t => t.id);
+    if (currentIds.length === all.length && currentIds.every((id, idx) => id === all[idx]?.id)) return;
+  }
+  playlist.tracks.splice(0, playlist.tracks.length, ...all);
   playlist.updatedAt = Date.now();
   if (state.activePlaylistId === playlist.id) {
     state.tracks = playlist.tracks;
@@ -893,7 +934,10 @@ const trackCrud = createTrackCrud({
   stopPlayback,
   setWaveformTrack,
   schedulePlaylistRender,
-  refreshFavoritesPlaylist,
+  refreshFavoritesPlaylist: ({ force = false } = {}) => {
+    refreshFavoritesPlaylist({ force });
+    refreshAllTracksPlaylist({ force });
+  },
   scheduleStorageStatsUpdate,
 });
 const {
@@ -1638,6 +1682,7 @@ clearPlaylistBtn?.addEventListener('click', async () => {
   persistLocalPlaylist();
   requestDropboxSync();
   refreshFavoritesPlaylist({ force: true });
+  refreshAllTracksPlaylist({ force: true });
   scheduleStorageStatsUpdate();
 });
 
@@ -2440,6 +2485,7 @@ dropboxDeleteFailedBtn?.addEventListener('click', async () => {
   updateControls();
   persistLocalPlaylist();
   refreshFavoritesPlaylist({ force: true });
+  refreshAllTracksPlaylist({ force: true });
   scheduleStorageStatsUpdate();
   updateDropboxUI();
 });
@@ -3928,7 +3974,8 @@ function writePlaylistSnapshot() {
       id: playlist.id,
       name: playlist.name,
       updatedAt: playlist.updatedAt ?? null,
-      tracks: playlist.tracks.map(serializeTrackLocal),
+      // allTracks auto playlist is always rebuilt on load — don't persist tracks to avoid doubling storage
+      tracks: playlist.autoType === 'allTracks' ? [] : playlist.tracks.map(serializeTrackLocal),
       isAuto: !!playlist.isAuto,
       autoType: playlist.autoType || null,
     })),
