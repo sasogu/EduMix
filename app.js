@@ -114,6 +114,8 @@ const clearLocalCopiesBtn = document.getElementById('clearLocalCopies');
 const dropboxTestConnBtn = document.getElementById('dropboxTestConn');
 const selectAllForSyncBtn = document.getElementById('selectAllForSync');
 const clearSelectedForSyncBtn = document.getElementById('clearSelectedForSync');
+const copySelectionToBtn = document.getElementById('copySelectionTo');
+const moveSelectionToBtn = document.getElementById('moveSelectionTo');
 const dropboxClearPendingBtn = document.getElementById('dropboxClearPending');
 const dropboxForceDeleteBtn = document.getElementById('dropboxForceDelete');
 const eqBassBtn = document.getElementById('eqBassBoost');
@@ -3017,6 +3019,127 @@ clearSelectedForSyncBtn?.addEventListener('click', () => {
   updateDropboxUI();
 });
 
+copySelectionToBtn?.addEventListener('click', async () => {
+  const selectedTracks = (state.tracks || []).filter(t => t?.id && selectedForSync.has(t.id));
+  if (!selectedTracks.length) return;
+  const active = getActivePlaylist();
+  const targets = state.playlists.filter(pl => !pl.isAuto && pl.id !== active?.id);
+  if (!targets.length) {
+    await showAppAlert('No hay otras listas disponibles.', { title: 'Sin destinos' });
+    return;
+  }
+  const dest = await showAppSelect(`Copiar ${selectedTracks.length} pista(s) a:`, {
+    title: 'Copiar selección',
+    confirmText: 'Copiar',
+    defaultValue: targets[0].id,
+    selectOptions: targets.map(pl => ({ value: pl.id, label: pl.name })),
+  });
+  if (dest === null || dest === false) return;
+  const target = targets.find(pl => pl.id === String(dest).trim());
+  if (!target) return;
+  let added = 0;
+  for (const track of selectedTracks) {
+    if (!trackExistsInPlaylist(target, track.id)) {
+      target.tracks.push(track);
+      added++;
+    }
+  }
+  target.updatedAt = Date.now();
+  if (state.activePlaylistId === target.id) {
+    syncTracksFromActivePlaylist();
+    schedulePlaylistRender();
+    updateControls();
+  }
+  persistLocalPlaylist();
+  requestCloudSync();
+  const skipped = selectedTracks.length - added;
+  const msg = skipped > 0
+    ? `${added} pista(s) copiadas a "${target.name}" (${skipped} ya estaban).`
+    : `${added} pista(s) copiadas a "${target.name}".`;
+  await showAppAlert(msg, { title: 'Copia completada' });
+});
+
+moveSelectionToBtn?.addEventListener('click', async () => {
+  const active = getActivePlaylist();
+  if (active?.isAuto) {
+    await showAppAlert('No se pueden mover pistas desde una lista automática.', { title: 'No disponible' });
+    return;
+  }
+  const selectedTracks = (state.tracks || []).filter(t => t?.id && selectedForSync.has(t.id));
+  if (!selectedTracks.length) return;
+  const targets = state.playlists.filter(pl => !pl.isAuto && pl.id !== active?.id);
+  if (!targets.length) {
+    await showAppAlert('No hay otras listas disponibles.', { title: 'Sin destinos' });
+    return;
+  }
+  const dest = await showAppSelect(`Mover ${selectedTracks.length} pista(s) a:`, {
+    title: 'Mover selección',
+    confirmText: 'Mover',
+    defaultValue: targets[0].id,
+    selectOptions: targets.map(pl => ({ value: pl.id, label: pl.name })),
+  });
+  if (dest === null || dest === false) return;
+  const target = targets.find(pl => pl.id === String(dest).trim());
+  if (!target) return;
+  const confirmed = await showAppConfirm(
+    `¿Mover ${selectedTracks.length} pista(s) de "${active.name}" a "${target.name}"?`,
+    { title: 'Mover selección', confirmText: 'Mover' }
+  );
+  if (!confirmed) return;
+
+  const selectedIds = new Set(selectedTracks.map(t => t.id));
+  const currentlyPlayingId = state.tracks[state.currentIndex]?.id;
+  let needsPlaybackStop = false;
+  let added = 0;
+
+  // Add to target
+  for (const track of selectedTracks) {
+    if (!trackExistsInPlaylist(target, track.id)) {
+      target.tracks.push(track);
+      added++;
+    }
+  }
+
+  // Remove from source back-to-front to preserve index validity
+  const toRemove = [];
+  for (let i = 0; i < state.tracks.length; i++) {
+    if (selectedIds.has(state.tracks[i]?.id)) toRemove.push(i);
+  }
+  for (let i = toRemove.length - 1; i >= 0; i--) {
+    const idx = toRemove[i];
+    const trackId = state.tracks[idx]?.id;
+    state.tracks.splice(idx, 1);
+    if (trackId === currentlyPlayingId) {
+      needsPlaybackStop = true;
+    } else if (state.currentIndex > idx) {
+      state.currentIndex -= 1;
+    }
+  }
+
+  // Clear moved IDs from selection
+  for (const id of selectedIds) selectedForSync.delete(id);
+
+  active.updatedAt = Date.now();
+  target.updatedAt = Date.now();
+
+  if (needsPlaybackStop) stopPlayback();
+
+  invalidateShuffle();
+  schedulePlaylistRender();
+  updateControls();
+  persistLocalPlaylist();
+  requestCloudSync();
+  refreshFavoritesPlaylist({ force: true });
+  refreshAllTracksPlaylist({ force: true });
+  scheduleStorageStatsUpdate();
+
+  const skipped = selectedTracks.length - added;
+  const msg = skipped > 0
+    ? `${added} pista(s) movidas a "${target.name}" (${skipped} ya estaban en el destino).`
+    : `${added} pista(s) movidas a "${target.name}".`;
+  await showAppAlert(msg, { title: 'Movimiento completado' });
+});
+
 pagerPrevBtn?.addEventListener('click', () => {
   if (state.viewPageSize <= 0) return;
   state.viewPageIndex = Math.max(0, (state.viewPageIndex || 0) - 1);
@@ -3695,6 +3818,12 @@ function updateControls() {
     nextTrackBtn.disabled = state.currentIndex === -1 || state.currentIndex >= state.tracks.length - 1;
   }
   clearPlaylistBtn.disabled = !state.tracks.length || activeIsAuto;
+  if (copySelectionToBtn || moveSelectionToBtn) {
+    const selCount = (state.tracks || []).filter(t => t?.id && selectedForSync.has(t.id)).length;
+    const hasOtherManual = state.playlists.some(pl => !pl.isAuto && pl.id !== state.activePlaylistId);
+    if (copySelectionToBtn) copySelectionToBtn.disabled = selCount === 0 || !hasOtherManual;
+    if (moveSelectionToBtn) moveSelectionToBtn.disabled = selCount === 0 || !hasOtherManual || activeIsAuto;
+  }
   if (deletePlaylistBtn) {
     deletePlaylistBtn.disabled = nonAutoCount <= 1 || activeIsAuto;
   }

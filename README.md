@@ -20,6 +20,7 @@ Puedes usarla totalmente en local (sin nube) o activar la sincronización para m
   - Valoración por estrellas (1–5) por pista.
   - Completar automáticamente artista/álbum: primero lee etiquetas ID3 y, si faltan datos, consulta MusicBrainz con peticiones espaciadas.
   - Marca favoritas con el corazón y consúltalas en la lista automática “Favoritas ⭐”.
+  - **Copiar / mover selección**: tras seleccionar pistas con los checkboxes (o “Seleccionar todo”), los botones “Copiar a…” y “Mover a…” permiten enviarlas a otra lista. Copiar mantiene las pistas en la lista original; mover las elimina de ella. Ambos omiten pistas que ya existen en el destino e informan del resultado.
   - **Detección de pistas duplicadas**: el botón ⊜ busca en todas las listas manuales pistas repetidas por nombre de archivo idéntico o por nombre + duración similar (±2 s). Muestra un panel donde puedes escuchar cada versión y elegir cuál conservar, o ignorar el grupo si no son duplicadas reales.
 
 - Reproducción y mezcla
