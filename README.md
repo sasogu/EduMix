@@ -20,6 +20,7 @@ Puedes usarla totalmente en local (sin nube) o activar la sincronización para m
   - Valoración por estrellas (1–5) por pista.
   - Completar automáticamente artista/álbum: primero lee etiquetas ID3 y, si faltan datos, consulta MusicBrainz con peticiones espaciadas.
   - Marca favoritas con el corazón y consúltalas en la lista automática “Favoritas ⭐”.
+  - **Detección de pistas duplicadas**: el botón ⊜ busca en todas las listas manuales pistas repetidas por nombre de archivo idéntico o por nombre + duración similar (±2 s). Muestra un panel donde puedes escuchar cada versión y elegir cuál conservar, o ignorar el grupo si no son duplicadas reales.
 
 - Reproducción y mezcla
   - Fundido configurable entre pistas.

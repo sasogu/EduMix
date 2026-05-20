@@ -10,6 +10,7 @@ import {
   createTrackCleanupHelpers,
   trackExistsInPlaylist,
 } from './modules/track-utils.js';
+import { createDuplicateUi } from './modules/duplicate-ui.js';
 
 const playlistEl = document.getElementById('playlist');
 const filePicker = document.getElementById('filePicker');
@@ -118,6 +119,7 @@ const dropboxForceDeleteBtn = document.getElementById('dropboxForceDelete');
 const eqBassBtn = document.getElementById('eqBassBoost');
 const eqMidBtn = document.getElementById('eqMidBoost');
 const eqTrebleBtn = document.getElementById('eqTrebleBoost');
+const detectDuplicatesBtn = document.getElementById('detectDuplicates');
 
 const appDialog = createAppDialog();
 const showAppAlert = appDialog.alert;
@@ -1531,6 +1533,24 @@ const {
   renameTrack: renameTrackImpl,
 } = trackCrud;
 
+const duplicateUi = createDuplicateUi({
+  state,
+  getTrackDisplayTitle,
+  showAppAlert,
+  persistLocalPlaylist,
+  requestCloudSync,
+  updateControls,
+  cleanupTrackResources,
+  invalidateShuffle,
+  stopPlayback,
+  schedulePlaylistRender,
+  refreshFavoritesPlaylist: ({ force = false } = {}) => {
+    refreshFavoritesPlaylist({ force });
+    refreshAllTracksPlaylist({ force });
+  },
+  scheduleStorageStatsUpdate,
+});
+
 function getAllTracks(options = {}) {
   const { includeAuto = false } = options || {};
   return state.playlists
@@ -2273,6 +2293,10 @@ clearPlaylistBtn?.addEventListener('click', async () => {
   refreshFavoritesPlaylist({ force: true });
   refreshAllTracksPlaylist({ force: true });
   scheduleStorageStatsUpdate();
+});
+
+detectDuplicatesBtn?.addEventListener('click', () => {
+  duplicateUi.showPanel().catch(console.error);
 });
 
 playlistPicker?.addEventListener('change', event => {
