@@ -749,14 +749,23 @@ export function createDropboxSync({
 
   // === Guardado de playlists en Dropbox ===
   async function ensurePlaylistsFolder(token) {
+    const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
     try {
-      const response = await fetch('https://api.dropboxapi.com/2/files/create_folder_v2', {
+      const metaRes = await fetch('https://api.dropboxapi.com/2/files/get_metadata', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        headers,
+        body: JSON.stringify({ path: config.playlistsDir }),
+      });
+      if (metaRes.ok) return true;
+    } catch {}
+    try {
+      const createRes = await fetch('https://api.dropboxapi.com/2/files/create_folder_v2', {
+        method: 'POST',
+        headers,
         body: JSON.stringify({ path: config.playlistsDir, autorename: false }),
       });
-      if (response.ok) return true;
-      if (response.status === 409) return true;
+      if (createRes.ok) return true;
+      if (createRes.status === 409) return true;
     } catch {}
     return false;
   }
@@ -1357,7 +1366,13 @@ export function createDropboxSync({
           nextPlaylists.push(pl);
           return;
         }
-        // No existe en remoto y no hay meta: podría ser nueva local o borrada remotamente
+        // Tenía ruta remota conocida pero ya no existe en Dropbox → borrada en otro dispositivo
+        if (meta?.path && !remotePaths.has(String(meta.path).toLowerCase())) {
+          recordDeletedPlaylistId(pl.id);
+          delete perListMeta[pl.id];
+          return;
+        }
+        // No existe en remoto y no hay meta: nueva local o borrada remotamente
         // Conservar si tiene tracks (el usuario la creó localmente)
         if (pl.tracks.length > 0 && !deletedPlaylistIds.has(pl.id)) {
           nextPlaylists.push(pl);
