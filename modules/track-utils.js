@@ -48,8 +48,9 @@ export function createTrackCleanupHelpers(deps) {
       track.coverUrl = null;
     }
     deleteTrackFile(track.id).catch(console.error);
-    if (deleteRemote && track.dropboxPath) {
-      addPendingDeletion(track.dropboxPath);
+    if (deleteRemote) {
+      if (track.dropboxPath) addPendingDeletion(track.dropboxPath);
+      if (track.webdavPath) addPendingDeletion(track.webdavPath);
     }
   }
 

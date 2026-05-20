@@ -5,6 +5,7 @@ import { createPlaylistCrud } from './modules/playlist-crud.js';
 import { createTrackCrud } from './modules/track-crud.js';
 import { createWaveformUi } from './modules/waveform-ui.js';
 import { createDropboxSync } from './modules/dropbox-sync.js';
+import { createWebdavSync } from './modules/webdav-sync.js';
 import {
   createTrackCleanupHelpers,
   trackExistsInPlaylist,
@@ -974,10 +975,26 @@ function mergePlaylistDocuments(localDoc, remoteDoc) {
   return result;
 }
 
+function getActiveSync() {
+  if (webdavSync.isConnected()) return webdavSync;
+  if (dropboxSync.isConnected()) return dropboxSync;
+  return null;
+}
+
+function addPendingDeletion(path) {
+  if (!path) return;
+  if (String(path).startsWith('http://') || String(path).startsWith('https://')) {
+    webdavSync.addPendingDeletion(path);
+  } else {
+    dropboxSync.addPendingDeletion(path);
+  }
+}
+
 function requestCloudSync(options = {}) {
-  if (!dropboxSync.isConnected()) return;
+  const active = getActiveSync();
+  if (!active) return;
   if (!state.autoSync) return;
-  dropboxSync.performSync({ ...options, triggeredAutomatically: true }).catch(console.error);
+  active.performSync({ ...options, triggeredAutomatically: true }).catch(console.error);
 }
 
 function applyFetchedSettings(json) {
@@ -1064,6 +1081,49 @@ const dropboxSync = createDropboxSync({
   autoSyncToggle,
 });
 
+function updateWebdavUI() {
+  // Reutilizar la actualización de UI de Dropbox hasta que se implemente la UI propia de WebDAV
+  updateDropboxUI();
+}
+
+function showWebdavError(msg) {
+  showDropboxError(msg);
+}
+
+const webdavSync = createWebdavSync({
+  state,
+  pendingUploads,
+  getAllTracks: () => getAllTracks(),
+  getActivePlaylist,
+  serializeTrack,
+  deserializeTrack,
+  persistLocalPlaylist,
+  renderPlaylist,
+  updateControls,
+  schedulePlaylistRender,
+  scheduleStorageStatsUpdate,
+  storeTrackFile,
+  loadTrackFile,
+  formatBytes,
+  sleep,
+  isNetworkError,
+  generateId,
+  applyRemoteDocumentToState,
+  mergePlaylistDocuments,
+  createPlaylistObject,
+  loadDeletedPlaylistIds,
+  recordDeletedPlaylistId,
+  AUTO_PLAYLISTS,
+  getTrackArtist,
+  ensureTrackMetadata,
+  ensureSharedTrackReferences,
+  ensurePlaylistsInitialized,
+  onStatusChange: () => updateWebdavUI(),
+  onError: (msg) => showWebdavError(msg),
+  applyFetchedSettings,
+  ensureEqState,
+});
+
 const {
   cleanupTrackResources,
   cleanupPlaylistTrackResources,
@@ -1071,7 +1131,7 @@ const {
   pendingUploads,
   waveformCache,
   deleteTrackFile,
-  addPendingDeletion: (path) => dropboxSync.addPendingDeletion(path),
+  addPendingDeletion,
   playlistsRef: () => state.playlists,
 });
 
@@ -1119,12 +1179,12 @@ const playlistCrud = createPlaylistCrud({
   showAppAlert,
   showAppPrompt,
   showAppConfirm,
-  isCloudConnected: () => dropboxSync.isConnected(),
-  performCloudSync: (opts) => dropboxSync.performSync(opts),
+  isCloudConnected: () => Boolean(getActiveSync()),
+  performCloudSync: (opts) => { const s = getActiveSync(); if (s) s.performSync(opts); },
   cleanupPlaylistTrackResources,
-  addPendingDeletion: (path) => dropboxSync.addPendingDeletion(path),
-  getCloudPerListMeta: (id) => dropboxSync.getPerListMeta()[id],
-  removeCloudPerListMeta: (id) => { delete dropboxSync.getPerListMeta()[id]; },
+  addPendingDeletion,
+  getCloudPerListMeta: (id) => { const s = getActiveSync(); return s ? s.getPerListMeta()[id] : null; },
+  removeCloudPerListMeta: (id) => { const s = getActiveSync(); if (s) delete s.getPerListMeta()[id]; },
   recordDeletedPlaylistId,
 });
 const { createPlaylist, renameActivePlaylist, deleteActivePlaylist } = playlistCrud;
@@ -1145,7 +1205,7 @@ const trackCrud = createTrackCrud({
   updateControls,
   updateNowPlaying,
   cleanupTrackResources,
-  addPendingDeletion: (path) => dropboxSync.addPendingDeletion(path),
+  addPendingDeletion,
   invalidateShuffle,
   playTrack,
   stopPlayback,
@@ -1341,11 +1401,12 @@ function maybePrefetchNext() {
     const nextIdx = peekNextIndex();
     if (nextIdx === -1) return;
     const next = state.tracks[nextIdx];
-    if (!next || !next.dropboxPath) return;
+    if (!next || (!next.dropboxPath && !next.webdavPath)) return;
     if (next.url && next.url.startsWith('blob:')) return;
     if (next._prefetching || next._prefetched) return;
     next._prefetching = true;
-    dropboxSync.ensureTrackUrl(next)
+    const _syncForPrefetch = next.webdavPath ? webdavSync : dropboxSync;
+    _syncForPrefetch.ensureTrackUrl(next)
       .then(ok => { next._prefetched = !!ok; })
       .catch(() => { /* noop */ })
       .finally(() => { next._prefetching = false; });
@@ -1549,12 +1610,15 @@ async function ensureWaveform(track) {
         }
         if (stored?.buffer) {
           arrayBuffer = stored.buffer;
-        } else if (track.isRemote || track.dropboxPath) {
-          const remoteLimit = evaluateWaveformLimits({ size: track.dropboxSize, duration: durationHint });
+        } else if (track.isRemote || track.dropboxPath || track.webdavPath) {
+          const remoteSize = track.dropboxSize ?? track.webdavSize ?? null;
+          const remoteLimit = evaluateWaveformLimits({ size: remoteSize, duration: durationHint });
           if (remoteLimit) {
             return markWaveformDisabled(track, remoteLimit.reason);
           }
-          const ready = await dropboxSync.ensureTrackUrl(track);
+          const ready = track.webdavPath
+            ? await webdavSync.ensureTrackUrl(track)
+            : await dropboxSync.ensureTrackUrl(track);
           if (!ready) {
             return null;
           }
@@ -2910,19 +2974,21 @@ async function playTrack(index, options = {}) {
     schedulePlaylistRender();
   }
   try {
+    const _remoteSync = track.webdavPath ? webdavSync : dropboxSync;
+    const _hasRemote = !!(track.dropboxPath || track.webdavPath);
     if (state.preferLocalSource) {
       ready = await ensureLocalTrackUrl(track);
-      if (!ready && track.dropboxPath) {
+      if (!ready && _hasRemote) {
         if (!needsRemote) {
           state.isLoadingTrack = true;
           updateControls();
           schedulePlaylistRender();
         }
-        ready = await dropboxSync.ensureTrackUrl(track);
+        ready = await _remoteSync.ensureTrackUrl(track);
       }
     } else {
-      if (track.dropboxPath) {
-        ready = await dropboxSync.ensureTrackUrl(track);
+      if (_hasRemote) {
+        ready = await _remoteSync.ensureTrackUrl(track);
         if (!ready) {
           ready = await ensureLocalTrackUrl(track);
         }
@@ -4074,6 +4140,7 @@ function writePlaylistSnapshot() {
     autoSync: state.autoSync,
     eqBoost: ensureEqState(),
     ...dropboxSync.getPersistedState(),
+    ...webdavSync.getPersistedState(),
     view: {
       pageSize: state.viewPageSize,
       pageSizeExplicit: state.viewPageSize === 0,
@@ -4088,6 +4155,7 @@ function writePlaylistSnapshot() {
     localStorage.setItem(STORAGE_KEYS.playlist, JSON.stringify(data));
     // Guardar en sidecar también para resiliencia entre versiones
     dropboxSync.persistSidecarState();
+    webdavSync.persistSidecarState();
   } catch (error) {
     console.warn('No se pudo guardar localmente la lista', error);
   }
@@ -4136,6 +4204,7 @@ function loadLocalPlaylist() {
       selectedForSync = new Set();
     }
     dropboxSync.loadPersistedState(data);
+    webdavSync.loadPersistedState(data);
     if (Number.isFinite(data?.fadeDuration)) {
       state.fadeDuration = data.fadeDuration;
       if (fadeSlider) {
@@ -4256,6 +4325,7 @@ function loadLocalPlaylist() {
     } catch {}
     // Normaliza y guarda inmediatamente la forma consolidada
     dropboxSync.persistSidecarState();
+    webdavSync.persistSidecarState();
     // Aplicar preferencias por lista si existen para la activa
     try { loadActiveViewPrefs(); } catch {}
   } catch (error) {
@@ -4576,11 +4646,13 @@ async function ensureCoverArt(track) {
       if (stored?.buffer) {
         const sliceSize = Math.min(stored.buffer.byteLength, COVER_ART_MAX_SOURCE_BYTES);
         buffer = stored.buffer.slice(0, sliceSize);
-      } else if ((track.isRemote || track.dropboxPath)) {
+      } else if (track.isRemote || track.dropboxPath || track.webdavPath) {
         if (track._remoteRetryAt && Date.now() < track._remoteRetryAt) {
           return false;
         }
-        const ready = await dropboxSync.ensureTrackUrl(track);
+        const ready = track.webdavPath
+          ? await webdavSync.ensureTrackUrl(track)
+          : await dropboxSync.ensureTrackUrl(track);
         if (!ready) return false;
         // Prefer leer de IDB para no volver a descargar
         const again = await loadTrackFile(track.id);
@@ -5053,7 +5125,9 @@ async function initialize() {
     handleWaveformClick(e);
   });
   fadeValue.textContent = `${state.fadeDuration.toFixed(1).replace(/\.0$/, '')} s`;
-  if (dropboxSync.isConnected()) {
+  if (webdavSync.isConnected()) {
+    webdavSync.performSync({ loadRemote: true }).catch(console.error);
+  } else if (dropboxSync.isConnected()) {
     dropboxSync.performSync({ loadRemote: true }).catch(console.error);
   }
   scheduleStorageStatsUpdate(0);
@@ -5142,6 +5216,7 @@ async function initialize() {
   });
 }
 
+webdavSync.handleRedirect().catch(console.error);
 dropboxSync.handleRedirect().catch(console.error).finally(() => {
   initialize().catch(console.error);
 });

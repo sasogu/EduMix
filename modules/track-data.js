@@ -42,6 +42,10 @@ export function createTrackDataHelpers(deps) {
       dropboxRev: track.dropboxRev ?? null,
       dropboxSize: track.dropboxSize ?? null,
       dropboxUpdatedAt: track.dropboxUpdatedAt ?? null,
+      webdavPath: track.webdavPath ?? null,
+      webdavEtag: track.webdavEtag ?? null,
+      webdavSize: track.webdavSize ?? null,
+      webdavUpdatedAt: track.webdavUpdatedAt ?? null,
       waveformStatus: track.waveformStatus ?? null,
     };
   }
@@ -65,6 +69,10 @@ export function createTrackDataHelpers(deps) {
       dropboxRev: track.dropboxRev ?? null,
       dropboxSize: track.dropboxSize ?? null,
       dropboxUpdatedAt: track.dropboxUpdatedAt ?? null,
+      webdavPath: track.webdavPath ?? null,
+      webdavEtag: track.webdavEtag ?? null,
+      webdavSize: track.webdavSize ?? null,
+      webdavUpdatedAt: track.webdavUpdatedAt ?? null,
       waveformStatus: track.waveformStatus ?? null,
     };
   }
@@ -92,10 +100,14 @@ export function createTrackDataHelpers(deps) {
       dropboxRev: entry.dropboxRev ?? null,
       dropboxSize: entry.dropboxSize ?? null,
       dropboxUpdatedAt: entry.dropboxUpdatedAt ?? null,
+      webdavPath: entry.webdavPath ?? null,
+      webdavEtag: entry.webdavEtag ?? null,
+      webdavSize: entry.webdavSize ?? null,
+      webdavUpdatedAt: entry.webdavUpdatedAt ?? null,
       waveform: null,
       waveformStatus: entry.waveformStatus ?? null,
       urlExpiresAt: 0,
-      isRemote: Boolean(entry.dropboxPath),
+      isRemote: Boolean(entry.dropboxPath || entry.webdavPath),
     };
   }
 
