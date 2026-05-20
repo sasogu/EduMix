@@ -55,7 +55,7 @@ const dropboxSyncSelectedBtn = document.getElementById('dropboxSyncSelected');
 const preferLocalSourceToggle = document.getElementById('preferLocalSource');
 const normalizationToggle = document.getElementById('normToggle');
 const autoSyncToggle = document.getElementById('dropboxAutoSync');
-const cloudOptionsEl = document.querySelector('.cloud-options');
+const cloudOptionsEl = document.getElementById('dropboxOptions');
 const pendingNoticeEl = document.getElementById('dropboxPendingNotice');
 const pendingNoticeTextEl = document.getElementById('dropboxPendingText');
 const pendingSyncNowBtn = document.getElementById('dropboxPendingSyncNow');
@@ -63,6 +63,29 @@ const pendingSyncNowBtn = document.getElementById('dropboxPendingSyncNow');
 const dropboxRetryFailedBtn = document.getElementById('dropboxRetryFailed');
 const dropboxDeleteFailedBtn = document.getElementById('dropboxDeleteFailed');
 const cloudSyncCard = document.querySelector('.cloud-sync');
+// Selector de proveedor
+const tabDropboxBtn = document.getElementById('tabDropbox');
+const tabWebdavBtn = document.getElementById('tabWebdav');
+const panelDropboxEl = document.getElementById('panelDropbox');
+const panelWebdavEl = document.getElementById('panelWebdav');
+// WebDAV UI
+const webdavStatusEl = document.getElementById('webdavStatus');
+const webdavProgressEl = document.getElementById('webdavProgress');
+const webdavProgressFillEl = document.getElementById('webdavProgressFill');
+const webdavFormEl = document.getElementById('webdavForm');
+const webdavUrlInput = document.getElementById('webdavUrl');
+const webdavUserInput = document.getElementById('webdavUser');
+const webdavPassInput = document.getElementById('webdavPass');
+const webdavConnectBtn = document.getElementById('webdavConnect');
+const webdavConnectedActionsEl = document.getElementById('webdavConnectedActions');
+const webdavSyncBtn = document.getElementById('webdavSync');
+const webdavSyncSelectedBtn = document.getElementById('webdavSyncSelected');
+const webdavRetryFailedBtn = document.getElementById('webdavRetryFailed');
+const webdavDisconnectBtn = document.getElementById('webdavDisconnect');
+const webdavAutoSyncToggle = document.getElementById('webdavAutoSync');
+const webdavPendingNoticeEl = document.getElementById('webdavPendingNotice');
+const webdavPendingTextEl = document.getElementById('webdavPendingText');
+const webdavPendingSyncNowBtn = document.getElementById('webdavPendingSyncNow');
 const waveformCanvas = document.getElementById('waveformCanvas');
 const waveformMessage = document.getElementById('waveformMessage');
 const waveformContainer = document.querySelector('.waveform');
@@ -1027,6 +1050,7 @@ function applyFetchedSettings(json) {
   if (typeof json.autoSync === 'boolean') {
     state.autoSync = !!json.autoSync;
     if (autoSyncToggle) autoSyncToggle.checked = state.autoSync;
+    if (webdavAutoSyncToggle) webdavAutoSyncToggle.checked = state.autoSync;
   }
   if (json.eqBoost) {
     state.eqBoost = normalizeEqBoost(json.eqBoost);
@@ -1081,13 +1105,130 @@ const dropboxSync = createDropboxSync({
   autoSyncToggle,
 });
 
+function showProviderPanel(provider) {
+  if (panelDropboxEl) panelDropboxEl.hidden = provider !== 'dropbox';
+  if (panelWebdavEl) panelWebdavEl.hidden = provider !== 'webdav';
+  if (tabDropboxBtn) {
+    tabDropboxBtn.classList.toggle('active', provider === 'dropbox');
+    tabDropboxBtn.setAttribute('aria-selected', String(provider === 'dropbox'));
+  }
+  if (tabWebdavBtn) {
+    tabWebdavBtn.classList.toggle('active', provider === 'webdav');
+    tabWebdavBtn.setAttribute('aria-selected', String(provider === 'webdav'));
+  }
+  try { localStorage.setItem('edumix-cloud-provider', provider); } catch {}
+}
+
+function updateProviderTabs() {
+  const isWebdav = webdavSync.isConnected();
+  const isDropbox = dropboxSync.isConnected();
+  if (isWebdav && !isDropbox) showProviderPanel('webdav');
+  else if (isDropbox && !isWebdav) showProviderPanel('dropbox');
+}
+
 function updateWebdavUI() {
-  // Reutilizar la actualización de UI de Dropbox hasta que se implemente la UI propia de WebDAV
-  updateDropboxUI();
+  if (!webdavStatusEl) return;
+  updateProviderTabs();
+  if (!webdavSync.isConnected()) {
+    webdavStatusEl.textContent = 'Sin conectar';
+    webdavStatusEl.classList.remove('is-error');
+    if (webdavFormEl) webdavFormEl.hidden = false;
+    if (webdavConnectedActionsEl) webdavConnectedActionsEl.hidden = true;
+    if (webdavProgressEl) { webdavProgressEl.hidden = true; webdavProgressEl.setAttribute('aria-hidden', 'true'); }
+    if (webdavPendingNoticeEl) webdavPendingNoticeEl.hidden = true;
+    cloudSyncCard?.classList.remove('is-syncing', 'is-error');
+    return;
+  }
+  const ss = webdavSync.getState();
+  if (ss.error) {
+    webdavStatusEl.textContent = 'Error de sincronización';
+    webdavStatusEl.classList.add('is-error');
+    cloudSyncCard?.classList.add('is-error');
+  } else {
+    if (ss.isSyncing) {
+      const total = Math.max(0, Number(ss.progressTotal) || 0);
+      const done = Math.max(0, Math.min(total, Number(ss.progressDone) || 0));
+      const bytesTotal = Number(ss.pendingBytesTotal) || 0;
+      const bytesDone = Math.max(0, Math.min(bytesTotal, Number(ss.pendingBytesDone) || 0));
+      const countText = total > 0 ? `${done}/${total}` : '';
+      const bytesText = bytesTotal > 0 ? ` (${formatBytes(bytesDone)} / ${formatBytes(bytesTotal)})` : '';
+      webdavStatusEl.textContent = `Sincronizando…${countText ? ` ${countText}` : ''}${bytesText}`;
+    } else if (ss.largeSyncNotice) {
+      const info = ss.largeSyncNotice;
+      const count = Number(info?.count) || 0;
+      const bytesText = Number(info?.totalBytes) > 0 ? ` (~${formatBytes(info.totalBytes)})` : '';
+      webdavStatusEl.textContent = `Pendiente: ${count} subida${count === 1 ? '' : 's'}${bytesText}.`;
+    } else {
+      webdavStatusEl.textContent = 'Conectado';
+    }
+    webdavStatusEl.classList.remove('is-error');
+    cloudSyncCard?.classList.remove('is-error');
+  }
+  cloudSyncCard?.classList.toggle('is-syncing', ss.isSyncing);
+  // Barra de progreso
+  if (webdavProgressEl && webdavProgressFillEl) {
+    if (ss.isSyncing && ss.progressTotal > 0) {
+      const total = Math.max(1, Number(ss.progressTotal) || 0);
+      const done = Math.max(0, Math.min(total, Number(ss.progressDone) || 0));
+      webdavProgressFillEl.style.width = `${Math.round((done / total) * 100)}%`;
+      webdavProgressEl.hidden = false;
+      webdavProgressEl.setAttribute('aria-hidden', 'false');
+    } else {
+      webdavProgressFillEl.style.width = '0%';
+      webdavProgressEl.hidden = true;
+      webdavProgressEl.setAttribute('aria-hidden', 'true');
+    }
+  }
+  if (webdavFormEl) webdavFormEl.hidden = true;
+  if (webdavConnectedActionsEl) webdavConnectedActionsEl.hidden = false;
+  if (webdavSyncBtn) { webdavSyncBtn.hidden = false; webdavSyncBtn.disabled = ss.isSyncing; }
+  if (webdavDisconnectBtn) { webdavDisconnectBtn.hidden = false; webdavDisconnectBtn.disabled = ss.isSyncing; }
+  if (webdavAutoSyncToggle) webdavAutoSyncToggle.checked = !!state.autoSync;
+  if (webdavSyncSelectedBtn) {
+    const validIds = new Set(state.tracks.map(t => t.id));
+    const count = Array.from(selectedForSync).filter(id => validIds.has(id)).length;
+    webdavSyncSelectedBtn.hidden = false;
+    webdavSyncSelectedBtn.disabled = ss.isSyncing || count === 0;
+  }
+  if (webdavRetryFailedBtn) {
+    const hasFailed = webdavSync.hasFailedUploads();
+    webdavRetryFailedBtn.hidden = !hasFailed;
+    webdavRetryFailedBtn.disabled = ss.isSyncing || !hasFailed;
+  }
+  // Aviso de cambios pendientes
+  if (webdavPendingNoticeEl) {
+    const autoLimit = ss.largeSyncNotice?.reason === 'auto-limit';
+    if (autoLimit && !ss.isSyncing) {
+      const info = ss.largeSyncNotice;
+      const count = Number(info?.count) || 0;
+      const bytesText = Number(info?.totalBytes) > 0 ? ` (~${formatBytes(info.totalBytes)})` : '';
+      if (webdavPendingTextEl) webdavPendingTextEl.textContent = `Sincronización automática pausada: ${count} pista${count === 1 ? '' : 's'} pendientes${bytesText}. Pulsa "Sincronizar ahora".`;
+      if (webdavPendingSyncNowBtn) webdavPendingSyncNowBtn.disabled = ss.isSyncing;
+      webdavPendingNoticeEl.hidden = false;
+    } else {
+      const pending = webdavSync.getPendingChanges();
+      if (!ss.isSyncing && !state.autoSync && (pending.uploads > 0 || pending.deletes > 0 || pending.listsChanged > 0)) {
+        const parts = [];
+        if (pending.uploads > 0) parts.push(`${pending.uploads} subida${pending.uploads !== 1 ? 's' : ''}`);
+        if (pending.deletes > 0) parts.push(`${pending.deletes} eliminación${pending.deletes !== 1 ? 'es' : ''}`);
+        if (pending.listsChanged > 0) parts.push(`${pending.listsChanged} lista${pending.listsChanged !== 1 ? 's' : ''} modificada${pending.listsChanged !== 1 ? 's' : ''}`);
+        if (webdavPendingTextEl) webdavPendingTextEl.textContent = `Cambios pendientes: ${parts.join(', ')}.`;
+        if (webdavPendingSyncNowBtn) webdavPendingSyncNowBtn.disabled = false;
+        webdavPendingNoticeEl.hidden = false;
+      } else {
+        if (webdavPendingSyncNowBtn) webdavPendingSyncNowBtn.disabled = true;
+        webdavPendingNoticeEl.hidden = true;
+      }
+    }
+  }
 }
 
 function showWebdavError(msg) {
-  showDropboxError(msg);
+  if (webdavStatusEl) {
+    webdavStatusEl.textContent = msg;
+    webdavStatusEl.classList.add('is-error');
+  }
+  if (cloudSyncCard) cloudSyncCard.classList.add('is-error');
 }
 
 const webdavSync = createWebdavSync({
@@ -2701,12 +2842,89 @@ normalizationToggle?.addEventListener('change', () => {
 
 autoSyncToggle?.addEventListener('change', () => {
   state.autoSync = !!autoSyncToggle.checked;
+  if (webdavAutoSyncToggle) webdavAutoSyncToggle.checked = state.autoSync;
   persistLocalPlaylist();
-  // No disparamos sync; se respetará la preferencia a partir de ahora y se guardará en settings en la próxima sync
   if (!state.autoSync && dropboxSync.getState().largeSyncNotice) {
     dropboxSync.getState().largeSyncNotice = null;
     updateDropboxUI();
   }
+  if (!state.autoSync && webdavSync.getState().largeSyncNotice) {
+    webdavSync.getState().largeSyncNotice = null;
+    updateWebdavUI();
+  }
+});
+
+webdavAutoSyncToggle?.addEventListener('change', () => {
+  state.autoSync = !!webdavAutoSyncToggle.checked;
+  if (autoSyncToggle) autoSyncToggle.checked = state.autoSync;
+  persistLocalPlaylist();
+  if (!state.autoSync && webdavSync.getState().largeSyncNotice) {
+    webdavSync.getState().largeSyncNotice = null;
+    updateWebdavUI();
+  }
+});
+
+// Tabs de proveedor
+tabDropboxBtn?.addEventListener('click', () => showProviderPanel('dropbox'));
+tabWebdavBtn?.addEventListener('click', () => showProviderPanel('webdav'));
+
+// WebDAV: conectar
+webdavConnectBtn?.addEventListener('click', async () => {
+  const serverUrl = webdavUrlInput?.value?.trim() || '';
+  const username = webdavUserInput?.value?.trim() || '';
+  const appPassword = webdavPassInput?.value?.trim() || '';
+  if (!serverUrl || !username || !appPassword) {
+    showWebdavError('Rellena todos los campos antes de conectar.');
+    return;
+  }
+  webdavConnectBtn.disabled = true;
+  webdavConnectBtn.textContent = 'Conectando…';
+  try {
+    const ok = await webdavSync.configure({ serverUrl, username, appPassword });
+    if (ok) {
+      if (webdavPassInput) webdavPassInput.value = '';
+      updateWebdavUI();
+      webdavSync.performSync({ loadRemote: true }).catch(console.error);
+    }
+  } finally {
+    webdavConnectBtn.disabled = false;
+    webdavConnectBtn.textContent = 'Conectar';
+  }
+});
+
+// WebDAV: sincronizar
+webdavSyncBtn?.addEventListener('click', () => {
+  webdavSync.performSync({ loadRemote: true }).catch(console.error);
+});
+
+// WebDAV: sincronizar seleccionados
+webdavSyncSelectedBtn?.addEventListener('click', () => {
+  const validIds = new Set(state.tracks.map(t => t.id));
+  const ids = Array.from(selectedForSync).filter(id => validIds.has(id));
+  if (!ids.length) return;
+  webdavSync.performSync({ loadRemote: true, onlyTrackIds: ids }).catch(console.error);
+});
+
+// WebDAV: desconectar
+webdavDisconnectBtn?.addEventListener('click', () => {
+  webdavSync.disconnect();
+  updateWebdavUI();
+});
+
+// WebDAV: reintentar fallidas
+webdavRetryFailedBtn?.addEventListener('click', async () => {
+  if (webdavSync.getState().isSyncing) return;
+  const failed = getAllTracks().filter(t => !t.webdavPath && t._sync === 'error');
+  if (!failed.length) return;
+  await Promise.allSettled(failed.map(t => ensureLocalTrackUrl(t)));
+  failed.forEach(t => { t._sync = 'queued'; });
+  renderPlaylist();
+  webdavSync.performSync({ loadRemote: false, onlyTrackIds: failed.map(t => t.id) }).catch(console.error);
+});
+
+// WebDAV: pendingNotice → sincronizar ahora
+webdavPendingSyncNowBtn?.addEventListener('click', () => {
+  webdavSync.performSync({ loadRemote: true }).catch(console.error);
 });
 
 pagerNextBtn?.addEventListener('click', () => {
@@ -4354,6 +4572,7 @@ function updateDropboxUI() {
     cloudSyncCard.classList.remove('is-syncing', 'is-error');
     if (cloudOptionsEl) cloudOptionsEl.hidden = true;
     if (pendingNoticeEl) pendingNoticeEl.hidden = true;
+    updateProviderTabs();
     return;
   }
   const syncState = dropboxSync.getState();
@@ -4478,6 +4697,7 @@ function showDropboxError(message) {
   if (cloudSyncCard) {
     cloudSyncCard.classList.add('is-error');
   }
+  updateProviderTabs();
 }
 
 // ========== Cover art (ID3 APIC) ==========
@@ -4819,9 +5039,11 @@ async function computeAndRenderStorageStats() {
     const seen = new Set();
     let cloudBytes = 0;
     getAllTracks().forEach(t => {
-      if (t.dropboxPath && !seen.has(t.dropboxPath)) {
-        seen.add(t.dropboxPath);
-        if (Number.isFinite(t.dropboxSize)) cloudBytes += t.dropboxSize;
+      const path = t.dropboxPath || t.webdavPath;
+      if (path && !seen.has(path)) {
+        seen.add(path);
+        const size = Number.isFinite(t.dropboxSize) ? t.dropboxSize : (Number.isFinite(t.webdavSize) ? t.webdavSize : 0);
+        cloudBytes += size;
       }
     });
     if (dropboxUsageEl) dropboxUsageEl.textContent = `${formatBytes(cloudBytes)} (${seen.size} pistas)`;
@@ -5125,6 +5347,15 @@ async function initialize() {
     handleWaveformClick(e);
   });
   fadeValue.textContent = `${state.fadeDuration.toFixed(1).replace(/\.0$/, '')} s`;
+  // Seleccionar el panel del proveedor activo al arrancar
+  try {
+    const stored = localStorage.getItem('edumix-cloud-provider');
+    if (webdavSync.isConnected()) showProviderPanel('webdav');
+    else if (dropboxSync.isConnected()) showProviderPanel('dropbox');
+    else if (stored === 'webdav') showProviderPanel('webdav');
+    else showProviderPanel('dropbox');
+  } catch { showProviderPanel('dropbox'); }
+
   if (webdavSync.isConnected()) {
     webdavSync.performSync({ loadRemote: true }).catch(console.error);
   } else if (dropboxSync.isConnected()) {
