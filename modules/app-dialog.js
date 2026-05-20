@@ -112,7 +112,11 @@ export function createAppDialog(doc = document, win = window) {
     selectEl.hidden = kind !== 'select';
     choicesEl.hidden = kind !== 'choice';
     inputEl.type = inputType;
-    inputEl.maxLength = kind === 'prompt' ? (inputMaxLength || 200) : -1;
+    if (kind === 'prompt') {
+      inputEl.maxLength = inputMaxLength || 200;
+    } else {
+      inputEl.removeAttribute('maxlength');
+    }
     inputEl.value = defaultValue ?? '';
     selectEl.innerHTML = '';
     choicesEl.innerHTML = '';
