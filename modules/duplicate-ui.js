@@ -128,7 +128,8 @@ export function createDuplicateUi(deps) {
     groupEl.appendChild(msg);
     resolvedCount += 1;
     if (counterEl) {
-      counterEl.textContent = `${resolvedCount} / ${totalGroups} resueltos`;
+      const pending = totalGroups - resolvedCount;
+      counterEl.textContent = `${resolvedCount} / ${totalGroups} resueltos · ${pending} pendientes`;
     }
   }
 
@@ -184,7 +185,7 @@ export function createDuplicateUi(deps) {
         const audio = getPreviewAudio();
         if (previewTrackId === item.track.id) {
           if (audio.paused) {
-            audio.play().catch(() => {});
+            audio.play().catch(() => { previewTrackId = null; updatePlayButtons(); });
           } else {
             audio.pause();
             previewTrackId = null;
@@ -193,8 +194,8 @@ export function createDuplicateUi(deps) {
           audio.pause();
           audio.src = item.track.url;
           audio.currentTime = 0;
-          audio.play().catch(() => {});
           previewTrackId = item.track.id;
+          audio.play().catch(() => { previewTrackId = null; updatePlayButtons(); });
         }
         updatePlayButtons();
       });
@@ -277,7 +278,7 @@ export function createDuplicateUi(deps) {
 
     counterEl = document.createElement('span');
     counterEl.className = 'dup-panel-counter';
-    counterEl.textContent = `0 / ${totalGroups} resueltos`;
+    counterEl.textContent = `0 / ${totalGroups} resueltos · ${totalGroups} pendientes`;
     headerEl.appendChild(counterEl);
 
     const closeBtn = document.createElement('button');

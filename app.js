@@ -133,6 +133,7 @@ const showAppChoice = appDialog.choice;
 const METADATA_LOOKUP_CONCURRENCY = 2;
 const METADATA_LOOKUP_COOLDOWN_MS = 1200;
 const MUSICBRAINZ_ENDPOINT = 'https://musicbrainz.org/ws/2/recording/';
+const METADATA_CACHE_MAX = 500;
 const metadataLookupCache = new Map();
 let metadataLookupInFlight = 0;
 const metadataLookupWaiters = [];
@@ -594,6 +595,7 @@ const waveformState = {
   duration: 0,
   progress: 0,
 };
+const WAVEFORM_CACHE_MAX = 100;
 const waveformCache = new Map();
 // Prefetch de siguiente pista remota
 let lastPrefetchForTrackId = null;
@@ -956,6 +958,7 @@ function setActivePlaylist(id) {
     // Marcar que hay un cambio de playlist pendiente
     pendingPlaylistChange = {
       targetId: id,
+      trackId: state.tracks[state.currentIndex]?.id,
       currentTrack: state.tracks[state.currentIndex],
       currentIndex: state.currentIndex
     };
@@ -2008,6 +2011,9 @@ async function ensureWaveform(track) {
       waveformCache.delete(track.id);
       return null;
     });
+  if (waveformCache.size >= WAVEFORM_CACHE_MAX) {
+    waveformCache.delete(waveformCache.keys().next().value);
+  }
   waveformCache.set(track.id, promise);
   return promise;
 }
@@ -2985,6 +2991,7 @@ clearLocalCopiesBtn?.addEventListener('click', async () => {
     danger: true,
   });
   if (!ok) return;
+  stopPlayback();
   const tracks = getAllTracks();
   for (const track of tracks) {
     try {
@@ -3487,6 +3494,7 @@ async function playTrack(index, options = {}) {
   if (!track) {
     return;
   }
+  const trackId = track.id;
   lastPrefetchForTrackId = null;
   // Marca para subir a Dropbox solo si se reproduce, si procede
   // Política "subir al reproducir" eliminada: solo sincronización manual
@@ -3532,6 +3540,10 @@ async function playTrack(index, options = {}) {
     state.isLoadingTrack = false;
     updateControls();
     schedulePlaylistRender();
+  }
+  // If the playlist was switched while awaiting the source, abort silently
+  if (state.tracks[index]?.id !== trackId) {
+    return;
   }
   if (!ready) {
     if (waveformContainer) {
@@ -3740,7 +3752,14 @@ function stopPlayback(options = {}) {
 function updateNowPlaying() {
   // Si hay cambio de playlist pendiente, mostrar la pista que está sonando
   if (pendingPlaylistChange && players.length && players[activePlayerIndex]) {
-    const currentTrack = pendingPlaylistChange.currentTrack;
+    const trackId = pendingPlaylistChange.trackId;
+    let currentTrack = pendingPlaylistChange.currentTrack;
+    if (trackId) {
+      for (const pl of state.playlists) {
+        const found = (pl.tracks || []).find(t => t?.id === trackId);
+        if (found) { currentTrack = found; break; }
+      }
+    }
     if (currentTrack) {
       const displayTitle = getTrackDisplayTitle(currentTrack);
       nowPlayingEl.textContent = `${displayTitle} (cambiando lista...)`;
@@ -4489,6 +4508,9 @@ async function ensureTrackMetadata(track) {
     const pending = queryMusicBrainz(title, '', track.duration);
     metadataLookupCache.set(cacheKey, pending);
     const result = await pending;
+    if (metadataLookupCache.size >= METADATA_CACHE_MAX) {
+      metadataLookupCache.delete(metadataLookupCache.keys().next().value);
+    }
     metadataLookupCache.set(cacheKey, result ?? null);
     return result;
   })()

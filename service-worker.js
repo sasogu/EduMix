@@ -15,6 +15,8 @@ const APP_SHELL = [
   './modules/track-crud.js',
   './modules/track-utils.js',
   './modules/waveform-ui.js',
+  './modules/duplicate-detector.js',
+  './modules/duplicate-ui.js',
   './icons/icon-192.png',
   './icons/icon-512.png',
 ];

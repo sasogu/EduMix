@@ -1898,6 +1898,7 @@ button.is-loading {
   background: var(--card-subtle);
   border-bottom: 1px solid var(--border);
   font-size: 0.8rem;
+  overflow: hidden;
 }
 
 .dup-criterion {

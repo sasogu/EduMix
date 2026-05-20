@@ -81,6 +81,7 @@ export function createAppDialog(doc = document, win = window) {
       kind = 'alert',
       defaultValue = '',
       inputType = 'text',
+      inputMaxLength = 200,
       selectOptions = [],
       choiceOptions = [],
       danger = false,
@@ -111,6 +112,7 @@ export function createAppDialog(doc = document, win = window) {
     selectEl.hidden = kind !== 'select';
     choicesEl.hidden = kind !== 'choice';
     inputEl.type = inputType;
+    inputEl.maxLength = kind === 'prompt' ? (inputMaxLength || 200) : -1;
     inputEl.value = defaultValue ?? '';
     selectEl.innerHTML = '';
     choicesEl.innerHTML = '';

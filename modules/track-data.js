@@ -14,6 +14,19 @@ export function createTrackDataHelpers(deps) {
         if (!track || !track.id) continue;
         const existing = map.get(track.id);
         if (existing) {
+          if ((track.updatedAt ?? 0) > (existing.updatedAt ?? 0)) {
+            const fields = [
+              'name', 'userRenamed', 'fileName',
+              'artist', 'album', 'isFavorite', 'duration', 'updatedAt', 'rating',
+              'normalizationGain', 'size', 'lastModified',
+              'dropboxPath', 'dropboxRev', 'dropboxSize', 'dropboxUpdatedAt',
+              'webdavPath', 'webdavEtag', 'webdavSize', 'webdavUpdatedAt',
+              'waveformStatus',
+            ];
+            for (const f of fields) {
+              if (track[f] !== undefined) existing[f] = track[f];
+            }
+          }
           playlist.tracks[i] = existing;
         } else {
           map.set(track.id, track);
