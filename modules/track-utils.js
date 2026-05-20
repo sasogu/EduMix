@@ -33,7 +33,7 @@ export function countDropboxPathReferences(playlists, path, excludePlaylistId = 
 }
 
 export function createTrackCleanupHelpers(deps) {
-  const { pendingUploads, waveformCache, deleteTrackFile, pendingDeletions, playlistsRef } = deps;
+  const { pendingUploads, waveformCache, deleteTrackFile, addPendingDeletion, playlistsRef } = deps;
 
   function cleanupTrackResources(track, options = {}) {
     const { deleteRemote = false } = options || {};
@@ -49,7 +49,7 @@ export function createTrackCleanupHelpers(deps) {
     }
     deleteTrackFile(track.id).catch(console.error);
     if (deleteRemote && track.dropboxPath) {
-      pendingDeletions.add(track.dropboxPath);
+      addPendingDeletion(track.dropboxPath);
     }
   }
 
@@ -66,7 +66,7 @@ export function createTrackCleanupHelpers(deps) {
       if (remainingTrackRefs === 0) {
         cleanupTrackResources(track, { deleteRemote: remainingDropboxRefs === 0 });
       } else if (track.dropboxPath && remainingDropboxRefs === 0) {
-        pendingDeletions.add(track.dropboxPath);
+        addPendingDeletion(track.dropboxPath);
       }
     }
   }

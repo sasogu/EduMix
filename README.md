@@ -127,6 +127,59 @@ Puedes usarla totalmente en local (sin nube) o activar la sincronización para m
 
 ---
 
+## Despliegue en VPS con GitHub Actions
+
+Este repositorio incluye el workflow `.github/workflows/deploy-vps.yml` para desplegar automáticamente al VPS por SSH usando `rsync`.
+
+### 1) Preparar el VPS (una sola vez)
+
+- Instala y configura tu servidor web (Nginx o Apache).
+- Crea la carpeta de destino, por ejemplo `/var/www/edumix`.
+- Crea un usuario de despliegue con acceso a esa carpeta.
+
+Ejemplo rápido en Ubuntu:
+
+```bash
+sudo adduser deploy
+sudo mkdir -p /var/www/edumix
+sudo chown -R deploy:deploy /var/www/edumix
+```
+
+### 2) Crear clave SSH para GitHub Actions
+
+En tu máquina local:
+
+```bash
+ssh-keygen -t ed25519 -C "github-actions-edumix" -f ~/.ssh/edumix_actions
+```
+
+- Copia la clave pública al VPS (usuario `deploy`):
+
+```bash
+ssh-copy-id -i ~/.ssh/edumix_actions.pub deploy@TU_VPS
+```
+
+- Guarda el contenido de `~/.ssh/edumix_actions` (clave privada) en un secret de GitHub.
+
+### 3) Configurar Secrets en GitHub
+
+En `Settings > Secrets and variables > Actions`, crea:
+
+- `VPS_HOST`: IP o dominio del VPS.
+- `VPS_PORT`: puerto SSH (normalmente `22`).
+- `VPS_USER`: usuario SSH (por ejemplo `deploy`).
+- `VPS_TARGET_PATH`: ruta de despliegue (por ejemplo `/var/www/edumix`).
+- `VPS_SSH_PRIVATE_KEY`: clave privada SSH generada para Actions.
+
+### 4) Lanzar despliegue
+
+- Automático: cada push a `main` o `master`.
+- Manual: pestaña `Actions` > workflow `Deploy to VPS` > `Run workflow`.
+
+El workflow sincroniza el contenido del repo con `rsync --delete`, excluyendo `.git`, `.github`, `README.md` y `LICENSE`.
+
+---
+
 ## Privacidad y almacenamiento
 
 - Local: las pistas importadas se guardan en IndexedDB solo en tu navegador.

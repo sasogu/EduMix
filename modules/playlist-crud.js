@@ -10,16 +10,17 @@ export function createPlaylistCrud(deps) {
     updateControls,
     updateNowPlaying,
     persistLocalPlaylist,
-    requestDropboxSync,
+    requestCloudSync,
     stopPlayback,
     showAppAlert,
     showAppPrompt,
     showAppConfirm,
-    isDropboxConnected,
-    performDropboxSync,
+    isCloudConnected,
+    performCloudSync,
     cleanupPlaylistTrackResources,
-    pendingDeletions,
-    dropboxPerListMeta,
+    addPendingDeletion,
+    getCloudPerListMeta,
+    removeCloudPerListMeta,
     recordDeletedPlaylistId,
   } = deps;
 
@@ -41,7 +42,7 @@ export function createPlaylistCrud(deps) {
     updateControls();
     updateNowPlaying();
     persistLocalPlaylist();
-    requestDropboxSync();
+    requestCloudSync();
   }
 
   async function renameActivePlaylist() {
@@ -63,10 +64,10 @@ export function createPlaylistCrud(deps) {
     active.updatedAt = Date.now();
     renderPlaylistPicker();
     persistLocalPlaylist();
-    if (isDropboxConnected()) {
-      performDropboxSync({ loadRemote: false }).catch(console.error);
+    if (isCloudConnected()) {
+      performCloudSync({ loadRemote: false }).catch(console.error);
     } else {
-      requestDropboxSync();
+      requestCloudSync();
     }
   }
 
@@ -88,13 +89,11 @@ export function createPlaylistCrud(deps) {
 
     recordDeletedPlaylistId(active.id);
 
-    const perListMeta = dropboxPerListMeta && dropboxPerListMeta[active.id];
-    if (perListMeta && perListMeta.path) {
-      pendingDeletions.add(String(perListMeta.path).toLowerCase());
+    const perListMetaEntry = getCloudPerListMeta(active.id);
+    if (perListMetaEntry?.path) {
+      addPendingDeletion(String(perListMetaEntry.path).toLowerCase());
     }
-    if (dropboxPerListMeta && typeof dropboxPerListMeta === 'object') {
-      delete dropboxPerListMeta[active.id];
-    }
+    removeCloudPerListMeta(active.id);
 
     state.playlists = state.playlists.filter(p => p.id !== active.id);
     if (!state.playlists.some(p => !p.isAuto)) {
@@ -111,7 +110,7 @@ export function createPlaylistCrud(deps) {
     updateControls();
     updateNowPlaying();
     persistLocalPlaylist();
-    requestDropboxSync();
+    requestCloudSync();
   }
 
   return {

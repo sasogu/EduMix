@@ -14,13 +14,13 @@ export function createTrackCrud(deps) {
     showAppConfirm,
     showAppPrompt,
     persistLocalPlaylist,
-    requestDropboxSync,
+    requestCloudSync,
     syncTracksFromActivePlaylist,
     renderPlaylist,
     updateControls,
     updateNowPlaying,
     cleanupTrackResources,
-    pendingDeletions,
+    addPendingDeletion,
     invalidateShuffle,
     playTrack,
     stopPlayback,
@@ -79,7 +79,7 @@ export function createTrackCrud(deps) {
     target.tracks.push(track);
     target.updatedAt = Date.now();
     persistLocalPlaylist();
-    requestDropboxSync();
+    requestCloudSync();
     if (state.activePlaylistId === target.id) {
       syncTracksFromActivePlaylist();
       renderPlaylist();
@@ -112,7 +112,7 @@ export function createTrackCrud(deps) {
     if (remainingTrackRefs === 0) {
       cleanupTrackResources(track, { deleteRemote: remainingDropboxRefs === 0 });
     } else if (track.dropboxPath && remainingDropboxRefs === 0) {
-      pendingDeletions.add(track.dropboxPath);
+      addPendingDeletion(track.dropboxPath);
     }
     state.tracks.splice(index, 1);
     const playlist = getActivePlaylist();
@@ -139,7 +139,7 @@ export function createTrackCrud(deps) {
     schedulePlaylistRender();
     updateControls();
     persistLocalPlaylist();
-    requestDropboxSync();
+    requestCloudSync();
     refreshFavoritesPlaylist({ force: true });
     scheduleStorageStatsUpdate();
   }
@@ -176,7 +176,7 @@ export function createTrackCrud(deps) {
     renderPlaylist();
     updateNowPlaying();
     persistLocalPlaylist();
-    requestDropboxSync();
+    requestCloudSync();
   }
 
   return {
