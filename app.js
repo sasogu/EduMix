@@ -194,6 +194,8 @@ const STORAGE_KEYS = {
   timeMode: 'edumix-time-mode', // 'elapsed' | 'remaining'
   viewPerList: 'edumix-view-per-list',
   deletedPlaylists: 'edumix-deleted-playlists',
+  moduleOrder: 'edumix-module-order',
+  moduleCollapsed: 'edumix-module-collapsed',
 };
 
 
@@ -221,6 +223,171 @@ const state = {
 };
 
 let selectedForSync = new Set();
+
+const moduleState = {
+  order: [],
+  collapsed: new Set(),
+  sections: new Map(),
+  toolbarById: new Map(),
+};
+
+function getModuleSections() {
+  const mainEl = document.querySelector('main');
+  if (!mainEl) return [];
+  return Array.from(mainEl.querySelectorAll(':scope > section.card[id]'));
+}
+
+function persistModuleLayout() {
+  try {
+    localStorage.setItem(STORAGE_KEYS.moduleOrder, JSON.stringify(moduleState.order));
+  } catch {}
+  try {
+    localStorage.setItem(STORAGE_KEYS.moduleCollapsed, JSON.stringify(Array.from(moduleState.collapsed)));
+  } catch {}
+}
+
+function setCollapseButtonLabel(button, isCollapsed) {
+  if (!button) return;
+  button.textContent = isCollapsed ? '▸' : '▾';
+  button.title = isCollapsed ? 'Expandir mòdul' : 'Contraure mòdul';
+  button.setAttribute('aria-label', isCollapsed ? 'Expandir mòdul' : 'Contraure mòdul');
+  button.setAttribute('aria-expanded', String(!isCollapsed));
+}
+
+function refreshModuleControls() {
+  moduleState.order.forEach((id, index) => {
+    const refs = moduleState.toolbarById.get(id);
+    if (!refs) return;
+    if (refs.upBtn) refs.upBtn.disabled = index === 0;
+    if (refs.downBtn) refs.downBtn.disabled = index === moduleState.order.length - 1;
+    setCollapseButtonLabel(refs.collapseBtn, moduleState.collapsed.has(id));
+  });
+}
+
+function applyModuleCollapsedState() {
+  moduleState.sections.forEach((section, id) => {
+    section.classList.toggle('is-collapsed', moduleState.collapsed.has(id));
+  });
+  refreshModuleControls();
+}
+
+function applyModuleOrder() {
+  const mainEl = document.querySelector('main');
+  if (!mainEl) return;
+  const desired = moduleState.order.slice();
+  desired.forEach(id => {
+    const section = moduleState.sections.get(id);
+    if (section) mainEl.appendChild(section);
+  });
+  refreshModuleControls();
+}
+
+function moveModule(id, direction) {
+  const currentIndex = moduleState.order.indexOf(id);
+  if (currentIndex < 0) return;
+  const targetIndex = currentIndex + direction;
+  if (targetIndex < 0 || targetIndex >= moduleState.order.length) return;
+  const nextOrder = moduleState.order.slice();
+  const [moved] = nextOrder.splice(currentIndex, 1);
+  nextOrder.splice(targetIndex, 0, moved);
+  moduleState.order = nextOrder;
+  applyModuleOrder();
+  persistModuleLayout();
+}
+
+function toggleModuleCollapsed(id) {
+  if (moduleState.collapsed.has(id)) moduleState.collapsed.delete(id);
+  else moduleState.collapsed.add(id);
+  applyModuleCollapsedState();
+  persistModuleLayout();
+}
+
+function createModuleToolbar(section, id) {
+  const toolbar = document.createElement('div');
+  toolbar.className = 'module-toolbar';
+  toolbar.setAttribute('role', 'group');
+  toolbar.setAttribute('aria-label', 'Opcions del mòdul');
+
+  const label = document.createElement('span');
+  label.className = 'module-toolbar-label';
+  const h2 = section.querySelector(':scope > h2, :scope > .section-heading h2');
+  label.textContent = h2?.textContent?.trim() || 'Mòdul';
+
+  const upBtn = document.createElement('button');
+  upBtn.type = 'button';
+  upBtn.className = 'ghost icon-button module-toolbar-btn';
+  upBtn.textContent = '↑';
+  upBtn.title = 'Moure amunt';
+  upBtn.setAttribute('aria-label', 'Moure mòdul amunt');
+  upBtn.addEventListener('click', () => moveModule(id, -1));
+
+  const downBtn = document.createElement('button');
+  downBtn.type = 'button';
+  downBtn.className = 'ghost icon-button module-toolbar-btn';
+  downBtn.textContent = '↓';
+  downBtn.title = 'Moure avall';
+  downBtn.setAttribute('aria-label', 'Moure mòdul avall');
+  downBtn.addEventListener('click', () => moveModule(id, 1));
+
+  const collapseBtn = document.createElement('button');
+  collapseBtn.type = 'button';
+  collapseBtn.className = 'ghost icon-button module-toolbar-btn';
+  collapseBtn.addEventListener('click', () => toggleModuleCollapsed(id));
+
+  toolbar.appendChild(label);
+  toolbar.appendChild(upBtn);
+  toolbar.appendChild(downBtn);
+  toolbar.appendChild(collapseBtn);
+
+  section.prepend(toolbar);
+  moduleState.toolbarById.set(id, { upBtn, downBtn, collapseBtn });
+}
+
+function initModuleLayoutControls() {
+  const sections = getModuleSections();
+  if (!sections.length) return;
+
+  moduleState.sections.clear();
+  moduleState.toolbarById.clear();
+
+  const availableIds = sections.map(section => section.id).filter(Boolean);
+  sections.forEach(section => {
+    section.classList.add('module-card');
+    moduleState.sections.set(section.id, section);
+    createModuleToolbar(section, section.id);
+    const headingRow = section.querySelector(':scope > .section-heading');
+    const heading = section.querySelector(':scope > h2');
+    if (headingRow) headingRow.classList.add('module-keep-visible');
+    if (heading) heading.classList.add('module-keep-visible');
+  });
+
+  let storedOrder = [];
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.moduleOrder);
+    const parsed = raw ? JSON.parse(raw) : [];
+    if (Array.isArray(parsed)) storedOrder = parsed.map(String);
+  } catch {}
+  const order = storedOrder.filter(id => availableIds.includes(id));
+  availableIds.forEach(id => {
+    if (!order.includes(id)) order.push(id);
+  });
+  moduleState.order = order;
+
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.moduleCollapsed);
+    const parsed = raw ? JSON.parse(raw) : [];
+    if (Array.isArray(parsed)) {
+      moduleState.collapsed = new Set(parsed.map(String).filter(id => availableIds.includes(id)));
+    }
+  } catch {
+    moduleState.collapsed = new Set();
+  }
+
+  applyModuleOrder();
+  applyModuleCollapsedState();
+}
+
+initModuleLayoutControls();
 
 // Estado de reproducción aleatoria
 let shuffleQueue = [];

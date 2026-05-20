@@ -234,6 +234,38 @@ main {
   border: 1px solid var(--border);
 }
 
+.module-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.35rem;
+  margin: -0.2rem 0 0.6rem;
+}
+
+.module-toolbar-label {
+  margin-right: auto;
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+}
+
+.module-toolbar-btn {
+  min-width: 2rem;
+  height: 2rem;
+  padding: 0;
+}
+
+.module-card.is-collapsed {
+  padding-bottom: 0.95rem;
+}
+
+.module-card.is-collapsed > :not(.module-toolbar):not(.module-keep-visible) {
+  display: none !important;
+}
+
+.module-card.is-collapsed > .module-keep-visible {
+  margin-bottom: 0;
+}
+
 .section-heading {
   display: flex;
   justify-content: space-between;
@@ -1387,6 +1419,10 @@ footer {
     border-left: none;
     border-right: none;
     padding: 0.9rem 1rem;
+  }
+
+  .module-toolbar-label {
+    font-size: 0.75rem;
   }
 
   /* Header compacto */
