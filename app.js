@@ -1495,7 +1495,7 @@ const playlistCrud = createPlaylistCrud({
   showAppPrompt,
   showAppConfirm,
   isCloudConnected: () => Boolean(getActiveSync()),
-  performCloudSync: (opts) => { const s = getActiveSync(); if (s) s.performSync(opts); },
+  performCloudSync: (opts) => { const s = getActiveSync(); if (s) return s.performSync(opts); },
   cleanupPlaylistTrackResources,
   addPendingDeletion,
   getCloudPerListMeta: (id) => { const s = getActiveSync(); return s ? s.getPerListMeta()[id] : null; },

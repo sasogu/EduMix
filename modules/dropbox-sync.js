@@ -901,7 +901,20 @@ export function createDropboxSync({
             const md = mv && (mv.metadata || mv);
             perListMeta[pl.id] = { path: desiredPath, rev: md?.rev || null, serverModified: md?.server_modified || null };
           } else if (moveResp.status === 409) {
-            perListMeta[pl.id] = { path: desiredPath, rev: null, serverModified: null };
+            // El destino ya existe; obtener su rev para subir con modo update en lugar de overwrite
+            let existingRev = null;
+            try {
+              const metaResp = await fetch('https://api.dropboxapi.com/2/files/get_metadata', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                body: JSON.stringify({ path: desiredPath }),
+              });
+              if (metaResp.ok) {
+                const metaData = await metaResp.json().catch(() => null);
+                existingRev = metaData?.rev || null;
+              }
+            } catch {}
+            perListMeta[pl.id] = { path: desiredPath, rev: existingRev, serverModified: null };
             pendingDeletions.add(lcPrev);
           }
         } catch {}
