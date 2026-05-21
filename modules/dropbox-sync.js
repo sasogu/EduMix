@@ -1268,7 +1268,7 @@ export function createDropboxSync({
       Object.entries(perListMeta).forEach(([id, m]) => {
         if (m?.path) cachedByPath.set(String(m.path).toLowerCase(), { id, serverModified: m.serverModified, rev: m.rev });
       });
-      const downloaded = (await Promise.all(jsonFiles.map(async (file) => {
+      const downloadOne = async (file) => {
         const path = file.path_lower || String(file.path_display || '').toLowerCase();
         const cached = cachedByPath.get(path);
         if (cached?.serverModified && cached.serverModified === file.server_modified) {
@@ -1279,13 +1279,25 @@ export function createDropboxSync({
           method: 'POST',
           headers: { Authorization: `Bearer ${token}`, 'Dropbox-API-Arg': JSON.stringify({ path }) },
         });
-        if (!resp.ok) return null;
+        if (!resp.ok) {
+          const retrySec = parseRetryInfo(resp.status, resp.headers, await resp.text().catch(() => ''));
+          if (retrySec > 0) await sleep(retrySec * 1000 + Math.random() * 250);
+          return null;
+        }
         const metaHeader = resp.headers.get('dropbox-api-result');
         let meta = {};
         try { meta = JSON.parse(metaHeader || '{}'); } catch {}
         const doc = await resp.json().catch(() => null);
         return (doc && doc.id) ? { path, meta, doc } : null;
-      }))).filter(Boolean);
+      };
+      // Limit concurrency to avoid 429 rate-limiting from Dropbox
+      const CONCURRENCY = 3;
+      const downloaded = [];
+      for (let i = 0; i < jsonFiles.length; i += CONCURRENCY) {
+        const batch = jsonFiles.slice(i, i + CONCURRENCY);
+        const results = await Promise.all(batch.map(downloadOne));
+        downloaded.push(...results.filter(Boolean));
+      }
 
       const mapLocalTracks = new Map();
       const mapLocalPlaylistMeta = new Map();
