@@ -58,7 +58,6 @@ const autoSyncToggle = document.getElementById('dropboxAutoSync');
 const cloudOptionsEl = document.getElementById('dropboxOptions');
 const pendingNoticeEl = document.getElementById('dropboxPendingNotice');
 const pendingNoticeTextEl = document.getElementById('dropboxPendingText');
-const pendingSyncNowBtn = document.getElementById('dropboxPendingSyncNow');
 // Declarado para evitar ReferenceError en usos con optional chaining
 const dropboxRetryFailedBtn = document.getElementById('dropboxRetryFailed');
 const dropboxDeleteFailedBtn = document.getElementById('dropboxDeleteFailed');
@@ -84,7 +83,6 @@ const webdavDisconnectBtn = document.getElementById('webdavDisconnect');
 const webdavAutoSyncToggle = document.getElementById('webdavAutoSync');
 const webdavPendingNoticeEl = document.getElementById('webdavPendingNotice');
 const webdavPendingTextEl = document.getElementById('webdavPendingText');
-const webdavPendingSyncNowBtn = document.getElementById('webdavPendingSyncNow');
 const waveformCanvas = document.getElementById('waveformCanvas');
 const waveformMessage = document.getElementById('waveformMessage');
 const waveformContainer = document.querySelector('.waveform');
@@ -1377,7 +1375,6 @@ function updateWebdavUI() {
       const count = Number(info?.count) || 0;
       const bytesText = Number(info?.totalBytes) > 0 ? ` (~${formatBytes(info.totalBytes)})` : '';
       if (webdavPendingTextEl) webdavPendingTextEl.textContent = `Sincronización automática pausada: ${count} pista${count === 1 ? '' : 's'} pendientes${bytesText}. Pulsa "Sincronizar".`;
-      if (webdavPendingSyncNowBtn) webdavPendingSyncNowBtn.disabled = ss.isSyncing;
       webdavPendingNoticeEl.hidden = false;
     } else {
       const pending = webdavSync.getPendingChanges();
@@ -1387,10 +1384,8 @@ function updateWebdavUI() {
         if (pending.deletes > 0) parts.push(`${pending.deletes} eliminación${pending.deletes !== 1 ? 'es' : ''}`);
         if (pending.listsChanged > 0) parts.push(`${pending.listsChanged} lista${pending.listsChanged !== 1 ? 's' : ''} modificada${pending.listsChanged !== 1 ? 's' : ''}`);
         if (webdavPendingTextEl) webdavPendingTextEl.textContent = `Cambios pendientes: ${parts.join(', ')}.`;
-        if (webdavPendingSyncNowBtn) webdavPendingSyncNowBtn.disabled = false;
         webdavPendingNoticeEl.hidden = false;
       } else {
-        if (webdavPendingSyncNowBtn) webdavPendingSyncNowBtn.disabled = true;
         webdavPendingNoticeEl.hidden = true;
       }
     }
@@ -2869,15 +2864,6 @@ dropboxDisconnectBtn?.addEventListener('click', () => {
 
 // Opción "subir al reproducir" eliminada: no hay listener
 
-// Botón rápido en el aviso de pendientes (si existe)
-try {
-  const btn = document.getElementById('dropboxPendingSyncNow');
-  btn?.addEventListener('click', () => {
-    if (dropboxSync.getState().isSyncing) return;
-    dropboxSync.performSync({ loadRemote: true }).catch(console.error);
-  });
-} catch {}
-
 // Limpiar pendientes ya inexistentes en Dropbox
 dropboxClearPendingBtn?.addEventListener('click', async () => {
   if (dropboxSync.getState().isSyncing) return;
@@ -2965,10 +2951,6 @@ dropboxTestConnBtn?.addEventListener('click', async () => {
 });
 
 // Botón rápido en el aviso de pendientes
-pendingSyncNowBtn?.addEventListener('click', () => {
-  if (dropboxSync.getState().isSyncing) return;
-  dropboxSync.performSync({ loadRemote: true }).catch(console.error);
-});
 
 // Opción "descargar solo al reproducir" eliminada: sin listener
 
@@ -3235,10 +3217,6 @@ webdavRetryFailedBtn?.addEventListener('click', async () => {
   webdavSync.performSync({ loadRemote: false, onlyTrackIds: failed.map(t => t.id) }).catch(console.error);
 });
 
-// WebDAV: pendingNotice → sincronizar ahora
-webdavPendingSyncNowBtn?.addEventListener('click', () => {
-  webdavSync.performSync({ loadRemote: true }).catch(console.error);
-});
 
 pagerNextBtn?.addEventListener('click', () => {
   if (state.viewPageSize <= 0) return;
@@ -4986,7 +4964,6 @@ function updateDropboxUI() {
       } else {
         pendingNoticeEl.textContent = text;
       }
-      if (pendingSyncNowBtn) pendingSyncNowBtn.disabled = syncState.isSyncing;
       pendingNoticeEl.hidden = false;
     } else {
       const pending = dropboxSync.getPendingChanges();
@@ -5000,10 +4977,8 @@ function updateDropboxUI() {
         } else {
           pendingNoticeEl.textContent = `Cambios pendientes: ${parts.join(', ')}.`;
         }
-        if (pendingSyncNowBtn) pendingSyncNowBtn.disabled = false;
         pendingNoticeEl.hidden = false;
       } else {
-        if (pendingSyncNowBtn) pendingSyncNowBtn.disabled = true;
         pendingNoticeEl.hidden = true;
       }
     }
