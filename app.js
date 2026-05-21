@@ -1009,6 +1009,9 @@ const localMediaStore = createLocalMediaStore({
   IDB_MAX_VALUE_BYTES,
   pendingUploads,
   getAllTracks: () => getAllTracks(),
+  waveformState,
+  schedulePlaylistRender,
+  persistLocalPlaylist,
 });
 const {
   openMediaDatabase,
@@ -1017,6 +1020,7 @@ const {
   deleteTrackFile,
   ensureLocalTrackUrl,
   restoreLocalMedia,
+  readDuration,
 } = localMediaStore;
 
 function sleep(ms) {
@@ -3410,44 +3414,6 @@ function addTracks(files) {
   requestCloudSync();
 }
 
-const durationQueue = [];
-let durationRunning = 0;
-const DURATION_CONCURRENCY = 5;
-
-function readDuration(track) {
-  durationQueue.push(track);
-  drainDurationQueue();
-}
-
-function drainDurationQueue() {
-  while (durationRunning < DURATION_CONCURRENCY && durationQueue.length > 0) {
-    const t = durationQueue.shift();
-    durationRunning++;
-    readDurationNow(t).finally(() => {
-      durationRunning--;
-      drainDurationQueue();
-    });
-  }
-}
-
-function readDurationNow(track) {
-  return new Promise(resolve => {
-    const probe = document.createElement('audio');
-    probe.preload = 'metadata';
-    const cleanup = () => { probe.src = ''; probe.load(); resolve(); };
-    probe.addEventListener('loadedmetadata', () => {
-      track.duration = probe.duration;
-      if (waveformState.trackId === track.id) {
-        waveformState.duration = track.duration;
-      }
-      cleanup();
-      schedulePlaylistRender();
-      persistLocalPlaylist();
-    }, { once: true });
-    probe.addEventListener('error', cleanup, { once: true });
-    probe.src = track.url;
-  });
-}
 
 async function copyTrackToPlaylist(index) {
   return copyTrackToPlaylistImpl(index);

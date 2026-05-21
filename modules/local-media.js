@@ -4,6 +4,9 @@ export function createLocalMediaStore(deps) {
     IDB_MAX_VALUE_BYTES,
     pendingUploads,
     getAllTracks,
+    waveformState,
+    schedulePlaylistRender,
+    persistLocalPlaylist,
   } = deps;
 
   let mediaDbPromise = null;
@@ -238,6 +241,45 @@ export function createLocalMediaStore(deps) {
     await Promise.allSettled(tasks);
   }
 
+  const durationQueue = [];
+  let durationRunning = 0;
+  const DURATION_CONCURRENCY = 5;
+
+  function readDuration(track) {
+    durationQueue.push(track);
+    drainDurationQueue();
+  }
+
+  function drainDurationQueue() {
+    while (durationRunning < DURATION_CONCURRENCY && durationQueue.length > 0) {
+      const t = durationQueue.shift();
+      durationRunning++;
+      readDurationNow(t).finally(() => {
+        durationRunning--;
+        drainDurationQueue();
+      });
+    }
+  }
+
+  function readDurationNow(track) {
+    return new Promise(resolve => {
+      const probe = document.createElement('audio');
+      probe.preload = 'metadata';
+      const cleanup = () => { probe.src = ''; probe.load(); resolve(); };
+      probe.addEventListener('loadedmetadata', () => {
+        track.duration = probe.duration;
+        if (waveformState.trackId === track.id) {
+          waveformState.duration = track.duration;
+        }
+        cleanup();
+        schedulePlaylistRender();
+        persistLocalPlaylist();
+      }, { once: true });
+      probe.addEventListener('error', cleanup, { once: true });
+      probe.src = track.url;
+    });
+  }
+
   return {
     openMediaDatabase,
     storeTrackFile,
@@ -245,5 +287,6 @@ export function createLocalMediaStore(deps) {
     deleteTrackFile,
     ensureLocalTrackUrl,
     restoreLocalMedia,
+    readDuration,
   };
 }
