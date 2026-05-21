@@ -2935,7 +2935,7 @@ dropboxTestConnBtn?.addEventListener('click', async () => {
     cloudSyncCard?.classList.remove('is-error');
   };
   try {
-    // 1) check/app — no requiere token
+    // 1) check/app — Dropbox devuelve 400 sin credenciales; basta para confirmar que la red llega
     const res = await fetch('https://api.dropboxapi.com/2/check/app', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -2945,8 +2945,6 @@ dropboxTestConnBtn?.addEventListener('click', async () => {
     // 400/401/403/404 siguen indicando que la ruta de red es accesible
     if (res.status >= 400 && res.status < 500) {
       markOk(`Conexión con Dropbox: OK (HTTP ${res.status})`);
-      const t = await res.text().catch(() => '');
-      console.debug('check/app response', res.status, t);
       return;
     }
     // Intento 2) check/user
@@ -2957,13 +2955,9 @@ dropboxTestConnBtn?.addEventListener('click', async () => {
     });
     if (res2.ok || (res2.status >= 400 && res2.status < 500)) {
       markOk(`Conexión con Dropbox: OK (HTTP ${res2.status})`);
-      const t = await res2.text().catch(() => '');
-      console.debug('check/user response', res2.status, t);
       return;
     }
-    const t = await res2.text().catch(() => '');
     showDropboxError('Dropbox responde pero con error.');
-    console.debug('check/user response', res2.status, t);
   } catch (e) {
     showDropboxError('Bloqueo de red/extension hacia Dropbox.');
     console.debug('Conectividad Dropbox fallida', e);
