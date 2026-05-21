@@ -1014,12 +1014,10 @@ const localMediaStore = createLocalMediaStore({
   persistLocalPlaylist,
 });
 const {
-  openMediaDatabase,
   storeTrackFile,
   loadTrackFile,
   deleteTrackFile,
   ensureLocalTrackUrl,
-  restoreLocalMedia,
   readDuration,
 } = localMediaStore;
 
@@ -3938,6 +3936,7 @@ function renderPlaylist() {
   const start = size ? state.viewPageIndex * size : 0;
   const end = size ? Math.min(total, start + size) : total;
 
+  const fragment = document.createDocumentFragment();
   for (let pos = start; pos < end; pos += 1) {
     const index = order[pos];
     const track = state.tracks[index];
@@ -4130,17 +4129,18 @@ function renderPlaylist() {
 
     actions.append(playButton, favoriteButton, renameButton, copyButton, removeButton, selector);
     item.append(handle, thumb, title, actions);
-    playlistEl.append(item);
+    fragment.append(item);
 
-    // Carátula solo para pistas con copia local. Las remotas sin URL local
-    // la cargarán al reproducirse para no disparar get_temporary_link en cada render.
-    if (!track.coverUrl && (track.url?.startsWith('blob:') || pendingUploads.has(track.id))) {
+    // Carátula solo para pistas locales. Las remotas sin URL local la cargarán
+    // al reproducirse para no disparar get_temporary_link en cada render.
+    if (!track.coverUrl && !track.dropboxPath && !track.webdavPath) {
       ensureCoverArt(track)
         .then(changed => { if (changed) updateTrackThumbnails(track); })
         .catch(() => {});
     }
   }
 
+  playlistEl.append(fragment);
   updatePagerUI();
 }
 
@@ -5030,9 +5030,13 @@ function showDropboxError(message) {
 }
 
 // ========== Cover art (ID3 APIC) ==========
+const _placeholderCoverCache = new Map();
 function getPlaceholderCover(size = 72) {
+  if (_placeholderCoverCache.has(size)) return _placeholderCoverCache.get(size);
   const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='${size}' height='${size}' viewBox='0 0 ${size} ${size}'>\n<defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'><stop offset='0' stop-color='#dbeafe'/><stop offset='1' stop-color='#bfdbfe'/></linearGradient></defs>\n<rect width='100%' height='100%' rx='${Math.max(4, Math.floor(size*0.1))}' fill='url(#g)'/>\n<text x='50%' y='50%' dominant-baseline='middle' text-anchor='middle' font-size='${Math.floor(size*0.55)}' fill='#4a90e2' font-family='Segoe UI, Roboto, Helvetica, Arial, sans-serif'>♪</text>\n</svg>`;
-  return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
+  const result = `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
+  _placeholderCoverCache.set(size, result);
+  return result;
 }
 function readSynchsafeInt(bytes, offset) {
   return (
@@ -5377,20 +5381,9 @@ async function computeAndRenderStorageStats() {
     });
     if (dropboxUsageEl) dropboxUsageEl.textContent = `${formatBytes(cloudBytes)} (${seen.size} pistas)`;
 
-    let localBytes = 0;
-    const db = await openMediaDatabase();
-    if (db) {
-      localBytes = await new Promise(resolve => {
-        const tx = db.transaction(IDB_CONFIG.store, 'readonly');
-        const req = tx.objectStore(IDB_CONFIG.store).getAll();
-        req.onsuccess = () => {
-          const arr = Array.isArray(req.result) ? req.result : [];
-          const sum = arr.reduce((acc, r) => acc + (r?.size || (r?.buffer?.byteLength || 0)), 0);
-          resolve(sum);
-        };
-        req.onerror = () => resolve(0);
-      });
-    }
+    const localBytes = getAllTracks()
+      .filter(t => !t.dropboxPath && !t.webdavPath)
+      .reduce((sum, t) => sum + (Number(t.size) || 0), 0);
     if (localUsageEl) localUsageEl.textContent = `${formatBytes(localBytes)}`;
   } catch (e) {
     console.warn('storage stats error', e);
@@ -5661,9 +5654,7 @@ function updateNormalizationLive() {
 async function initialize() {
   updateFooterVersion().catch(console.error);
   loadLocalPlaylist();
-  await restoreLocalMedia();
   const allTracks = getAllTracks();
-  await Promise.allSettled(allTracks.filter(track => !track.dropboxPath).map(track => ensureLocalTrackUrl(track)));
   renderPlaylist();
   updateControls();
   setupMediaSession();
