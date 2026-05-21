@@ -1,0 +1,23 @@
+## git
+## main...origin/main
+?? test-sessions/
+?? testing-plans/
+aa7067d (HEAD -> main, origin/main) 1.7.6 — fix sync: borrado de lista propagado a otros dispositivos; fix dialog maxLength; evitar 409 en create_folder
+
+## syntax
+node --check: PASS
+
+## manifest
+manifest name: EduMix
+icons/icon-192.png exists= True sizes= 192x192
+icons/icon-512.png exists= True sizes= 512x512
+
+## version
+version.js:1:self.EDUMIX_VERSION = '1.7.6';
+service-worker.js:3:const APP_VERSION = self.EDUMIX_VERSION || '1.6.15';
+service-worker.js:4:const CACHE_NAME = `edumix-cache-v${APP_VERSION}`;
+service-worker.js:45:  const cache = await caches.open(CACHE_NAME);
+service-worker.js:54:      const cache = await caches.open(CACHE_NAME);
+service-worker.js:83:    caches.open(CACHE_NAME)
+service-worker.js:97:          .filter(key => key !== CACHE_NAME)
+app.js:2200:  const version = globalThis.EDUMIX_VERSION;

@@ -1,0 +1,36 @@
+## playlist deletion
+13:    requestCloudSync,
+21:    addPendingDeletion,
+23:    removeCloudPerListMeta,
+24:    recordDeletedPlaylistId,
+45:    requestCloudSync();
+70:      requestCloudSync();
+74:  async function deleteActivePlaylist() {
+90:    recordDeletedPlaylistId(active.id);
+94:      addPendingDeletion(String(perListMetaEntry.path).toLowerCase());
+96:    removeCloudPerListMeta(active.id);
+113:    requestCloudSync();
+119:    deleteActivePlaylist,
+
+## dialog maxlength
+84:      inputMaxLength = 200,
+116:      inputEl.maxLength = inputMaxLength || 200;
+118:      inputEl.removeAttribute('maxlength');
+
+## dropbox 409/create_folder
+439:          if (response.status === 409) continue;
+528:        if (status === 409) {
+762:      const createRes = await fetch('https://api.dropboxapi.com/2/files/create_folder_v2', {
+768:      if (createRes.status === 409) return true;
+810:          if (response.status === 409 && playlistMeta?.rev) {
+812:            const resolution = await showAppChoice('Se han detectado cambios locales y remotos en Dropbox. Elige como resolver el conflicto.', {
+896:            body: JSON.stringify({ from_path: meta.path, to_path: desiredPath, autorename: false, allow_shared_folder: true, allow_ownership_transfer: false }),
+903:          } else if (moveResp.status === 409) {
+927:            if (response.status === 409) {
+1030:      if (response.status === 409) return;
+1236:      const response = await fetch('https://api.dropboxapi.com/2/files/list_folder', {
+1241:      if (response.status === 409) return;
+1244:        throw new Error(txt || 'list_folder failed');
+1542:            if (resp.status === 409 && /not_found|path_lookup/i.test(txt)) {
+1572:      const response = await fetch('https://api.dropboxapi.com/2/files/list_folder', {
+1577:      if (response.status === 409) return false;
