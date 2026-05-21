@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+
+"$ROOT/bump-version.sh"
+
+# Si el script modificó service-worker.js, incluirlo en el commit
+if ! git diff --quiet "$ROOT/service-worker.js"; then
+  git add "$ROOT/service-worker.js"
+fi
