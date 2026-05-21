@@ -79,11 +79,31 @@ export function createLocalMediaStore(deps) {
     return mediaDbPromise;
   }
 
-  async function storeTrackFile(id, file) {
-    const db = await openMediaDatabase();
-    if (!db) {
-      return;
+  const idbWriteQueue = [];
+  let idbWriteRunning = 0;
+  const IDB_WRITE_CONCURRENCY = 3;
+
+  function drainIdbWriteQueue() {
+    while (idbWriteRunning < IDB_WRITE_CONCURRENCY && idbWriteQueue.length > 0) {
+      const { id, file, resolve, reject } = idbWriteQueue.shift();
+      idbWriteRunning++;
+      storeTrackFileNow(id, file).then(resolve, reject).finally(() => {
+        idbWriteRunning--;
+        drainIdbWriteQueue();
+      });
     }
+  }
+
+  function storeTrackFile(id, file) {
+    return new Promise((resolve, reject) => {
+      idbWriteQueue.push({ id, file, resolve, reject });
+      drainIdbWriteQueue();
+    });
+  }
+
+  async function storeTrackFileNow(id, file) {
+    const db = await openMediaDatabase();
+    if (!db) return;
     const size = Number(file?.size || 0);
     if (size > IDB_MAX_VALUE_BYTES) {
       console.warn('Archivo demasiado grande para IndexedDB; se omite almacenamiento local', { id, size });

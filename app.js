@@ -3397,13 +3397,18 @@ function addTracks(files) {
   }
   newTracks.forEach(track => {
     scheduleWaveformGeneration(track);
-    ensureCoverArt(track)
-      .then(changed => { if (changed) updateTrackThumbnails(track); })
-      .catch(() => {})
-      .finally(() => {
-        ensureTrackMetadata(track).catch(() => {});
-      });
   });
+  // Diferir cover art y metadata para no bloquear el render inicial
+  setTimeout(() => {
+    newTracks.forEach(track => {
+      ensureCoverArt(track)
+        .then(changed => { if (changed) updateTrackThumbnails(track); })
+        .catch(() => {})
+        .finally(() => {
+          ensureTrackMetadata(track).catch(() => {});
+        });
+    });
+  }, 500);
   invalidateShuffle();
   renderPlaylist();
   updateControls();
@@ -3411,21 +3416,43 @@ function addTracks(files) {
   requestCloudSync();
 }
 
+const durationQueue = [];
+let durationRunning = 0;
+const DURATION_CONCURRENCY = 5;
+
 function readDuration(track) {
-  const probe = document.createElement('audio');
-  probe.preload = 'metadata';
-  const cleanup = () => { probe.src = ''; probe.load(); };
-  probe.addEventListener('loadedmetadata', () => {
-    track.duration = probe.duration;
-    if (waveformState.trackId === track.id) {
-      waveformState.duration = track.duration;
-    }
-    cleanup();
-    schedulePlaylistRender();
-    persistLocalPlaylist();
-  }, { once: true });
-  probe.addEventListener('error', cleanup, { once: true });
-  probe.src = track.url;
+  durationQueue.push(track);
+  drainDurationQueue();
+}
+
+function drainDurationQueue() {
+  while (durationRunning < DURATION_CONCURRENCY && durationQueue.length > 0) {
+    const t = durationQueue.shift();
+    durationRunning++;
+    readDurationNow(t).finally(() => {
+      durationRunning--;
+      drainDurationQueue();
+    });
+  }
+}
+
+function readDurationNow(track) {
+  return new Promise(resolve => {
+    const probe = document.createElement('audio');
+    probe.preload = 'metadata';
+    const cleanup = () => { probe.src = ''; probe.load(); resolve(); };
+    probe.addEventListener('loadedmetadata', () => {
+      track.duration = probe.duration;
+      if (waveformState.trackId === track.id) {
+        waveformState.duration = track.duration;
+      }
+      cleanup();
+      schedulePlaylistRender();
+      persistLocalPlaylist();
+    }, { once: true });
+    probe.addEventListener('error', cleanup, { once: true });
+    probe.src = track.url;
+  });
 }
 
 async function copyTrackToPlaylist(index) {
