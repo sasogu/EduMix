@@ -127,6 +127,24 @@ Puedes usarla totalmente en local (sin nube) o activar la sincronización para m
   - Abre `http://localhost:8080/`.
 - Sin permisos externos: todo funciona sin Dropbox; si lo activas, requiere conexión.
 
+### Versiones y git hooks
+
+El proyecto usa un pre-commit hook para mantener sincronizados `version.js` y el fallback de `service-worker.js`.
+
+**Primera vez que clonas el repo**, activa el hook con:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+A partir de entonces, cada `git commit` ejecuta `bump-version.sh` automáticamente: lee la versión de `version.js` y actualiza el fallback en `service-worker.js`, añadiéndolo al commit si cambió.
+
+Para subir la versión manualmente sin hacer commit:
+
+```bash
+./bump-version.sh
+```
+
 ---
 
 ## Despliegue en VPS con GitHub Actions
