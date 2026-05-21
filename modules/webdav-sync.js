@@ -746,6 +746,12 @@ export function createWebdavSync({
         nextPlaylists.push(pl);
         return;
       }
+      // Tenía ruta remota conocida pero ya no existe → borrada en otro dispositivo
+      if (meta?.path && !remotePaths.has(meta.path)) {
+        recordDeletedPlaylistId(pl.id);
+        delete perListMeta[pl.id];
+        return;
+      }
       if (pl.tracks.length > 0 && !deletedPlaylistIds.has(pl.id)) {
         nextPlaylists.push(pl);
       }
