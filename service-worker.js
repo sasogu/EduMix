@@ -1,6 +1,6 @@
 try { importScripts('./version.js'); } catch {}
 
-const APP_VERSION = self.EDUMIX_VERSION || '1.7.8';
+const APP_VERSION = self.EDUMIX_VERSION || '1.7.9';
 const CACHE_NAME = `edumix-cache-v${APP_VERSION}`;
 // Mantén el shell mínimo y coherente: evita diferencias y claves ambiguas
 const APP_SHELL = [
