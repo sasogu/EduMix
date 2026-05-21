@@ -52,7 +52,6 @@ const dropboxProgressFillEl = document.getElementById('dropboxProgressFill');
 const dropboxConnectBtn = document.getElementById('dropboxConnect');
 const dropboxSyncBtn = document.getElementById('dropboxSync');
 const dropboxDisconnectBtn = document.getElementById('dropboxDisconnect');
-const dropboxSyncSelectedBtn = document.getElementById('dropboxSyncSelected');
 const preferLocalSourceToggle = document.getElementById('preferLocalSource');
 const normalizationToggle = document.getElementById('normToggle');
 const autoSyncToggle = document.getElementById('dropboxAutoSync');
@@ -80,7 +79,6 @@ const webdavPassInput = document.getElementById('webdavPass');
 const webdavConnectBtn = document.getElementById('webdavConnect');
 const webdavConnectedActionsEl = document.getElementById('webdavConnectedActions');
 const webdavSyncBtn = document.getElementById('webdavSync');
-const webdavSyncSelectedBtn = document.getElementById('webdavSyncSelected');
 const webdavRetryFailedBtn = document.getElementById('webdavRetryFailed');
 const webdavDisconnectBtn = document.getElementById('webdavDisconnect');
 const webdavAutoSyncToggle = document.getElementById('webdavAutoSync');
@@ -1357,14 +1355,14 @@ function updateWebdavUI() {
   }
   if (webdavFormEl) webdavFormEl.hidden = true;
   if (webdavConnectedActionsEl) webdavConnectedActionsEl.hidden = false;
-  if (webdavSyncBtn) { webdavSyncBtn.hidden = false; webdavSyncBtn.disabled = ss.isSyncing; }
   if (webdavDisconnectBtn) { webdavDisconnectBtn.hidden = false; webdavDisconnectBtn.disabled = ss.isSyncing; }
   if (webdavAutoSyncToggle) webdavAutoSyncToggle.checked = !!state.autoSync;
-  if (webdavSyncSelectedBtn) {
+  if (webdavSyncBtn) {
     const validIds = new Set(state.tracks.map(t => t.id));
     const count = Array.from(selectedForSync).filter(id => validIds.has(id)).length;
-    webdavSyncSelectedBtn.hidden = false;
-    webdavSyncSelectedBtn.disabled = ss.isSyncing || count === 0;
+    webdavSyncBtn.hidden = false;
+    webdavSyncBtn.textContent = count > 0 ? `Sincronizar (${count})` : 'Sincronizar';
+    webdavSyncBtn.disabled = ss.isSyncing;
   }
   if (webdavRetryFailedBtn) {
     const hasFailed = webdavSync.hasFailedUploads();
@@ -1378,7 +1376,7 @@ function updateWebdavUI() {
       const info = ss.largeSyncNotice;
       const count = Number(info?.count) || 0;
       const bytesText = Number(info?.totalBytes) > 0 ? ` (~${formatBytes(info.totalBytes)})` : '';
-      if (webdavPendingTextEl) webdavPendingTextEl.textContent = `Sincronización automática pausada: ${count} pista${count === 1 ? '' : 's'} pendientes${bytesText}. Pulsa "Sincronizar ahora".`;
+      if (webdavPendingTextEl) webdavPendingTextEl.textContent = `Sincronización automática pausada: ${count} pista${count === 1 ? '' : 's'} pendientes${bytesText}. Pulsa "Sincronizar".`;
       if (webdavPendingSyncNowBtn) webdavPendingSyncNowBtn.disabled = ss.isSyncing;
       webdavPendingNoticeEl.hidden = false;
     } else {
@@ -2856,13 +2854,13 @@ dropboxConnectBtn?.addEventListener('click', () => {
 });
 
 dropboxSyncBtn?.addEventListener('click', () => {
-  dropboxSync.performSync({ loadRemote: true }).catch(console.error);
-});
-
-dropboxSyncSelectedBtn?.addEventListener('click', () => {
-  const ids = Array.from(selectedForSync);
-  if (!ids.length) return;
-  dropboxSync.performSync({ loadRemote: true, onlyTrackIds: ids }).catch(console.error);
+  const validIds = new Set(state.tracks.map(t => t.id));
+  const ids = Array.from(selectedForSync).filter(id => validIds.has(id));
+  if (ids.length) {
+    dropboxSync.performSync({ loadRemote: true, onlyTrackIds: ids }).catch(console.error);
+  } else {
+    dropboxSync.performSync({ loadRemote: true }).catch(console.error);
+  }
 });
 
 dropboxDisconnectBtn?.addEventListener('click', () => {
@@ -3209,17 +3207,15 @@ webdavConnectBtn?.addEventListener('click', async () => {
   }
 });
 
-// WebDAV: sincronizar
+// WebDAV: sincronizar (todo o solo seleccionados)
 webdavSyncBtn?.addEventListener('click', () => {
-  webdavSync.performSync({ loadRemote: true }).catch(console.error);
-});
-
-// WebDAV: sincronizar seleccionados
-webdavSyncSelectedBtn?.addEventListener('click', () => {
   const validIds = new Set(state.tracks.map(t => t.id));
   const ids = Array.from(selectedForSync).filter(id => validIds.has(id));
-  if (!ids.length) return;
-  webdavSync.performSync({ loadRemote: true, onlyTrackIds: ids }).catch(console.error);
+  if (ids.length) {
+    webdavSync.performSync({ loadRemote: true, onlyTrackIds: ids }).catch(console.error);
+  } else {
+    webdavSync.performSync({ loadRemote: true }).catch(console.error);
+  }
 });
 
 // WebDAV: desconectar
@@ -4890,9 +4886,6 @@ function updateDropboxUI() {
     dropboxStatusEl.textContent = 'Sin conectar';
     dropboxStatusEl.classList.remove('is-error');
     dropboxSyncBtn.hidden = true;
-    if (dropboxSyncSelectedBtn) {
-      dropboxSyncSelectedBtn.hidden = true;
-    }
     dropboxDisconnectBtn.hidden = true;
     if (dropboxRetryFailedBtn) {
       dropboxRetryFailedBtn.hidden = true;
@@ -4948,16 +4941,15 @@ function updateDropboxUI() {
   dropboxConnectBtn.hidden = true;
   dropboxSyncBtn.hidden = false;
   dropboxDisconnectBtn.hidden = false;
-  dropboxSyncBtn.disabled = syncState.isSyncing;
   dropboxDisconnectBtn.disabled = syncState.isSyncing;
   if (dropboxTestConnBtn) { dropboxTestConnBtn.hidden = false; dropboxTestConnBtn.disabled = syncState.isSyncing; }
   if (cloudOptionsEl) cloudOptionsEl.hidden = false;
   if (autoSyncToggle) autoSyncToggle.checked = !!state.autoSync;
-  if (dropboxSyncSelectedBtn) {
-    dropboxSyncSelectedBtn.hidden = false;
+  {
     const validIds = new Set(state.tracks.map(t => t.id));
     const count = Array.from(selectedForSync).filter(id => validIds.has(id)).length;
-    dropboxSyncSelectedBtn.disabled = syncState.isSyncing || count === 0;
+    dropboxSyncBtn.textContent = count > 0 ? `Sincronizar (${count})` : 'Sincronizar';
+    dropboxSyncBtn.disabled = syncState.isSyncing;
   }
   if (dropboxRetryFailedBtn || dropboxDeleteFailedBtn) {
     const hasFailed = dropboxSync.hasFailedUploads();
