@@ -177,6 +177,43 @@ export function createWebdavSync({
     } catch { return false; }
   }
 
+  async function adoptExistingRemoteFiles(candidates) {
+    if (!candidates.length) return;
+    try {
+      const listing = await propfind(`${baseUrl()}/audio/`, '1');
+      if (!listing) return;
+      const remoteByUuid = new Map();
+      for (const file of listing) {
+        if (file.isCollection) continue;
+        const filename = decodeURIComponent((file.href || '').split('/').pop());
+        const uuid = filename.substring(0, 36);
+        if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(uuid)) {
+          remoteByUuid.set(uuid, file);
+        }
+      }
+      if (!remoteByUuid.size) return;
+      let adopted = 0;
+      for (const track of candidates) {
+        const remote = remoteByUuid.get(track.id);
+        if (!remote) continue;
+        track.webdavPath = remote.href;
+        track.webdavEtag = remote.etag || null;
+        track.webdavSize = remote.contentLength || null;
+        track.webdavUpdatedAt = Date.now();
+        track.isRemote = true;
+        track._sync = null;
+        pendingUploads.delete(track.id);
+        adopted++;
+      }
+      if (adopted) {
+        persistLocalPlaylist();
+        console.info(`[webdav] Adopted ${adopted} existing remote files, skipping upload.`);
+      }
+    } catch (e) {
+      console.warn('[webdav] adoptExistingRemoteFiles failed', e);
+    }
+  }
+
   async function ensureFolders() {
     await ensureFolder(baseUrl());
     await ensureFolder(`${baseUrl()}/audio`);
@@ -875,7 +912,12 @@ export function createWebdavSync({
         await pullPlaylistsPerList();
         await pullSettings().catch(() => {});
       }
-      await uploadPendingTracks(candidates, { sizeByTrack });
+      await adoptExistingRemoteFiles(candidates);
+      const toUpload = candidates.filter(t => !t.webdavPath);
+      syncState.progressDone += candidates.length - toUpload.length;
+      syncState.progressTotal = toUpload.length + syncState.progressDone;
+      onStatusChange();
+      await uploadPendingTracks(toUpload, { sizeByTrack });
       await processPendingDeletions();
       await savePlaylistsPerList();
       await saveSettings().catch(() => {});
