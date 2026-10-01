@@ -554,6 +554,30 @@ function invalidateShuffle() {
 
 let audioContext = null;
 const players = [];
+
+// iOS/iPadOS suspende el AudioContext en segundo plano y silencia los <audio>
+// enrutados por Web Audio. Allí reproducimos directamente con el elemento.
+const IS_IOS = typeof navigator !== 'undefined' && (
+  /iPad|iPhone|iPod/.test(navigator.userAgent || '') ||
+  (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
+);
+const DIRECT_AUDIO_MODE = IS_IOS;
+try {
+  if (DIRECT_AUDIO_MODE && navigator.audioSession) navigator.audioSession.type = 'playback';
+} catch {}
+
+// Imita la API mínima de AudioParam usada por los fundidos, sobre audio.volume.
+function createVolumeParam(audio) {
+  const clamp = v => Math.max(0, Math.min(1, Number(v) || 0));
+  return {
+    get value() { return audio.volume; },
+    set value(v) { try { audio.volume = clamp(v); } catch {} },
+    setValueAtTime(v) { this.value = v; },
+    linearRampToValueAtTime(v) { this.value = v; },
+    setTargetAtTime(v) { this.value = v; },
+    cancelScheduledValues() {},
+  };
+}
 let activePlayerIndex = 0;
 let dragIndex = null;
 let deferredPrompt = null;
@@ -2016,7 +2040,10 @@ async function ensureWaveform(track) {
 async function computeWaveformFromArrayBuffer(arrayBuffer) {
   const buffer = await new Promise((resolve, reject) => {
     const copy = arrayBuffer.slice(0);
-    getAudioContext().decodeAudioData(copy, resolve, reject);
+    // En modo directo decodificamos sin un AudioContext vivo que toque la sesión de audio de iOS
+    const OfflineCtx = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+    const decoder = DIRECT_AUDIO_MODE && OfflineCtx ? new OfflineCtx(1, 1, 44100) : getAudioContext();
+    decoder.decodeAudioData(copy, resolve, reject);
   });
   const peaks = await extractPeaks(buffer, WAVEFORM_SAMPLES);
   return {
@@ -2089,6 +2116,16 @@ function createPlayer() {
     if ('mozPreservesPitch' in audio) audio.mozPreservesPitch = true;
     if ('webkitPreservesPitch' in audio) audio.webkitPreservesPitch = true;
   } catch {}
+  if (DIRECT_AUDIO_MODE) {
+    const player = { audio, gain: { gain: createVolumeParam(audio) }, compressor: null, eq: null, stopTimeout: null, advanceHandler: null, trackId: null };
+    audio.addEventListener('timeupdate', () => {
+      handleWaveformProgress(player);
+      updateTimeDisplay(player);
+    });
+    audio.addEventListener('loadedmetadata', () => handleWaveformMetadata(player));
+    return player;
+  }
+
   const ctx = getAudioContext();
   const source = ctx.createMediaElementSource(audio);
   const eq = {
@@ -2202,7 +2239,12 @@ async function updateFooterVersion() {
   }
 }
 
+function audioNow() {
+  return DIRECT_AUDIO_MODE ? 0 : getAudioContext().currentTime;
+}
+
 async function ensureContextRunning() {
+  if (DIRECT_AUDIO_MODE) return;
   const ctx = getAudioContext();
   if (ctx.state === 'suspended') {
     await ctx.resume();
@@ -3534,7 +3576,8 @@ async function playTrack(index, options = {}) {
   await ensureContextRunning();
 
   const hasCurrent = state.currentIndex !== -1 && state.isPlaying;
-  const useFade = fade && hasCurrent;
+  // Sin Web Audio no hay fundido real: ambos elementos sonarían a la vez
+  const useFade = fade && hasCurrent && !DIRECT_AUDIO_MODE;
   const previousPlayerIndex = activePlayerIndex;
   ensurePlayers();
   const nextPlayerIndex = useFade ? 1 - activePlayerIndex : activePlayerIndex;
@@ -3597,7 +3640,7 @@ async function playTrack(index, options = {}) {
     }
   }
 
-  const now = getAudioContext().currentTime;
+  const now = audioNow();
   const fallbackFade = Number.isFinite(state.fadeDuration) ? state.fadeDuration : CROSS_FADE_MIN;
   const resolvedFade = Number.isFinite(fadeDurationOverride) ? fadeDurationOverride : fallbackFade;
   const fadeDuration = useFade ? Math.max(resolvedFade, CROSS_FADE_MIN) : CROSS_FADE_MIN;
@@ -3619,7 +3662,7 @@ async function playTrack(index, options = {}) {
       }
       previousPlayer.audio.pause();
       previousPlayer.audio.currentTime = 0;
-    previousPlayer.gain.gain.setValueAtTime(0, getAudioContext().currentTime);
+    previousPlayer.gain.gain.setValueAtTime(0, audioNow());
       previousPlayer.trackId = null;
     }, fadeDuration * 1000 + 120);
   } else if (previousPlayerIndex !== nextPlayerIndex) {
@@ -3677,7 +3720,7 @@ function stopPlayback(options = {}) {
   }
   
   if (players.length) {
-    const now = audioContext ? getAudioContext().currentTime : 0;
+    const now = audioContext ? audioNow() : 0;
     players.forEach(player => {
       cancelAutoAdvance(player);
       player.audio.onended = null;
@@ -5597,7 +5640,7 @@ function updateNormalizationLive() {
     // subir a 1× de forma suave
     if (state.currentIndex >= 0 && players.length) {
       const p = players[activePlayerIndex];
-      const now = getAudioContext().currentTime;
+      const now = audioNow();
       try {
         p.gain.gain.cancelScheduledValues(now);
         p.gain.gain.linearRampToValueAtTime(1, now + 0.1);
@@ -5610,7 +5653,7 @@ function updateNormalizationLive() {
   const baseGain = Number.isFinite(track.normalizationGain) && track.normalizationGain > 0 ? track.normalizationGain : 1;
   if (players.length) {
     const p = players[activePlayerIndex];
-    const now = getAudioContext().currentTime;
+    const now = audioNow();
     try {
       p.gain.gain.cancelScheduledValues(now);
       p.gain.gain.linearRampToValueAtTime(baseGain, now + 0.12);
