@@ -561,9 +561,18 @@ const IS_IOS = typeof navigator !== 'undefined' && (
   /iPad|iPhone|iPod/.test(navigator.userAgent || '') ||
   (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
 );
-const DIRECT_AUDIO_MODE = IS_IOS;
+// Prueba: ?audio=webaudio fuerza Web Audio también en iOS (?audio=auto vuelve al modo por defecto)
+const AUDIO_MODE_OVERRIDE = (() => {
+  try {
+    const param = new URLSearchParams(location.search).get('audio');
+    if (param === 'webaudio') localStorage.setItem('edumix.audioMode', 'webaudio');
+    if (param === 'auto') localStorage.removeItem('edumix.audioMode');
+    return localStorage.getItem('edumix.audioMode');
+  } catch { return null; }
+})();
+const DIRECT_AUDIO_MODE = IS_IOS && AUDIO_MODE_OVERRIDE !== 'webaudio';
 try {
-  if (DIRECT_AUDIO_MODE && navigator.audioSession) navigator.audioSession.type = 'playback';
+  if (IS_IOS && navigator.audioSession) navigator.audioSession.type = 'playback';
 } catch {}
 
 // Imita la API mínima de AudioParam usada por los fundidos, sobre audio.volume.
@@ -2231,7 +2240,7 @@ async function updateFooterVersion() {
   if (!appVersionEl) return;
   const version = globalThis.EDUMIX_VERSION;
   if (version) {
-    appVersionEl.textContent = `EduMix v${version}`;
+    appVersionEl.textContent = `EduMix v${version}` + (IS_IOS ? (DIRECT_AUDIO_MODE ? ' · audio directo' : ' · Web Audio') : '');
     return;
   }
   if (!appVersionEl.textContent.trim()) {
