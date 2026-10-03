@@ -555,25 +555,33 @@ function invalidateShuffle() {
 let audioContext = null;
 const players = [];
 
-// iOS/iPadOS suspende el AudioContext en segundo plano y silencia los <audio>
-// enrutados por Web Audio. Allí reproducimos directamente con el elemento.
+// iOS/iPadOS suspende el AudioContext en segundo plano salvo que la sesión de
+// audio sea 'playback' (navigator.audioSession, Safari 16.4+). Sin esa API
+// reproducimos directamente con el elemento <audio> (sin fundidos ni EQ).
 const IS_IOS = typeof navigator !== 'undefined' && (
   /iPad|iPhone|iPod/.test(navigator.userAgent || '') ||
   (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
 );
-// Prueba: ?audio=webaudio fuerza Web Audio también en iOS (?audio=auto vuelve al modo por defecto)
+let IOS_AUDIO_SESSION = false;
+try {
+  if (IS_IOS && navigator.audioSession) {
+    navigator.audioSession.type = 'playback';
+    IOS_AUDIO_SESSION = true;
+  }
+} catch {}
+// ?audio=direct | ?audio=webaudio fuerzan un modo en iOS; ?audio=auto vuelve al automático
 const AUDIO_MODE_OVERRIDE = (() => {
   try {
     const param = new URLSearchParams(location.search).get('audio');
-    if (param === 'webaudio') localStorage.setItem('edumix.audioMode', 'webaudio');
+    if (param === 'webaudio' || param === 'direct') localStorage.setItem('edumix.audioMode', param);
     if (param === 'auto') localStorage.removeItem('edumix.audioMode');
     return localStorage.getItem('edumix.audioMode');
   } catch { return null; }
 })();
-const DIRECT_AUDIO_MODE = IS_IOS && AUDIO_MODE_OVERRIDE !== 'webaudio';
-try {
-  if (IS_IOS && navigator.audioSession) navigator.audioSession.type = 'playback';
-} catch {}
+const DIRECT_AUDIO_MODE = IS_IOS && (
+  AUDIO_MODE_OVERRIDE === 'direct' ||
+  (AUDIO_MODE_OVERRIDE !== 'webaudio' && !IOS_AUDIO_SESSION)
+);
 
 // Imita la API mínima de AudioParam usada por los fundidos, sobre audio.volume.
 function createVolumeParam(audio) {
