@@ -2140,6 +2140,7 @@ function createPlayer() {
       updateTimeDisplay(player);
     });
     audio.addEventListener('loadedmetadata', () => handleWaveformMetadata(player));
+    audio.addEventListener('error', () => handlePlayerError(player));
     return player;
   }
 
@@ -2186,6 +2187,7 @@ function createPlayer() {
   applyEqSettings(player);
   audio.addEventListener('timeupdate', () => { handleWaveformProgress(player); updateTimeDisplay(player); });
   audio.addEventListener('loadedmetadata', () => handleWaveformMetadata(player));
+  audio.addEventListener('error', () => handlePlayerError(player));
   return player;
 }
 
@@ -2222,11 +2224,11 @@ function scheduleAutoAdvance(player, index) {
     if (remaining <= fadeWindow + 0.05) {
       cancelAutoAdvance(player);
       if (state.autoLoop && state.tracks[index]) {
-        playTrack(index, { fadeDurationOverride: fadeWindow }).catch(console.error);
+        playTrack(index, { fadeDurationOverride: fadeWindow, auto: true }).catch(console.error);
       } else {
         const nextIndex = getNextIndex();
         if (nextIndex !== -1) {
-          playTrack(nextIndex, { fadeDurationOverride: fadeWindow }).catch(console.error);
+          playTrack(nextIndex, { fadeDurationOverride: fadeWindow, auto: true }).catch(console.error);
         } else {
           stopPlayback();
         }
@@ -2240,6 +2242,12 @@ function scheduleAutoAdvance(player, index) {
 function getAudioContext() {
   if (!audioContext) {
     audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    // iOS pasa a 'interrupted' con llamadas o Siri; al terminar hay que reanudar
+    audioContext.addEventListener?.('statechange', () => {
+      if (state.isPlaying && audioContext.state !== 'running' && audioContext.state !== 'closed') {
+        audioContext.resume().catch(() => {});
+      }
+    });
   }
   return audioContext;
 }
@@ -2263,10 +2271,17 @@ function audioNow() {
 async function ensureContextRunning() {
   if (DIRECT_AUDIO_MODE) return;
   const ctx = getAudioContext();
-  if (ctx.state === 'suspended') {
-    await ctx.resume();
+  if (ctx.state === 'suspended' || ctx.state === 'interrupted') {
+    try { await ctx.resume(); } catch (error) { console.warn('No se pudo reanudar el AudioContext', error); }
   }
 }
+
+// Reintento al volver a primer plano, por si la interrupción terminó en segundo plano
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && state.isPlaying && audioContext) {
+    ensureContextRunning();
+  }
+});
 
 window.addEventListener('resize', scheduleWaveformResize);
 
@@ -3507,18 +3522,63 @@ function reorderTracks(from, to) {
 }
 
 
+// Cada llamada a playTrack recibe un número; si llega otra petición mientras
+// espera (descarga, play()), la anterior se abandona para no sonar dos pistas.
+let playRequestSeq = 0;
+// Fallos seguidos al avanzar solo; al llegar al límite se detiene la lista.
+let consecutivePlayFailures = 0;
+const MAX_CONSECUTIVE_PLAY_FAILURES = 3;
+
+function handlePlayFailure(index, auto, message) {
+  const name = state.tracks[index]?.name || 'la pista';
+  if (!auto || consecutivePlayFailures + 1 >= MAX_CONSECUTIVE_PLAY_FAILURES) {
+    consecutivePlayFailures = 0;
+    if (auto) {
+      stopPlayback();
+      message = 'Varias pistas seguidas no se han podido reproducir. Reproducción detenida.';
+    }
+    if (waveformMessage && message) waveformMessage.textContent = message;
+    return;
+  }
+  consecutivePlayFailures += 1;
+  // Avanza desde la pista fallida, no desde la anterior
+  state.currentIndex = index;
+  const nextIndex = getNextIndex();
+  if (nextIndex === -1) {
+    stopPlayback();
+    return;
+  }
+  if (waveformMessage) waveformMessage.textContent = `No se pudo reproducir «${name}». Pasando a la siguiente.`;
+  playTrack(nextIndex, { auto: true }).catch(console.error);
+}
+
+function handlePlayerError(player) {
+  const code = player.audio.error?.code;
+  if (!player.trackId || code === 1 /* MEDIA_ERR_ABORTED */) return;
+  if (players[activePlayerIndex] !== player || !state.isPlaying) return;
+  const index = state.currentIndex;
+  if (state.tracks[index]?.id !== player.trackId) return;
+  console.error('Error del elemento de audio', player.audio.error);
+  cancelAutoAdvance(player);
+  player.audio.onended = null;
+  player.trackId = null;
+  handlePlayFailure(index, true, 'No se pudo reproducir la pista.');
+}
+
 async function playTrack(index, options = {}) {
   const track = state.tracks[index];
   if (!track) {
     return;
   }
+  const requestId = ++playRequestSeq;
+  const isStale = () => requestId !== playRequestSeq;
   const trackId = track.id;
   lastPrefetchForTrackId = null;
   // Marca para subir a Dropbox solo si se reproduce, si procede
   // Política "subir al reproducir" eliminada: solo sincronización manual
   // Marca como reproducida para permitir descargas/forma de onda bajo política "solo al reproducir"
   track._hasPlayed = true;
-  const { fade = true, fadeDurationOverride } = options;
+  const { fade = true, fadeDurationOverride, auto = false } = options;
   setWaveformTrack(track);
 
   await ensureContextRunning();
@@ -3542,11 +3602,11 @@ async function playTrack(index, options = {}) {
           updateControls();
           schedulePlaylistRender();
         }
-        ready = await _remoteSync.ensureTrackUrl(track);
+        ready = await _remoteSync.ensureTrackUrl(track, { priority: true });
       }
     } else {
       if (_hasRemote) {
-        ready = await _remoteSync.ensureTrackUrl(track);
+        ready = await _remoteSync.ensureTrackUrl(track, { priority: true });
         if (!ready) {
           ready = await ensureLocalTrackUrl(track);
         }
@@ -3555,12 +3615,14 @@ async function playTrack(index, options = {}) {
       }
     }
   } finally {
-    state.isLoadingTrack = false;
-    updateControls();
-    schedulePlaylistRender();
+    if (!isStale()) {
+      state.isLoadingTrack = false;
+      updateControls();
+      schedulePlaylistRender();
+    }
   }
-  // If the playlist was switched while awaiting the source, abort silently
-  if (state.tracks[index]?.id !== trackId) {
+  // Otra pista pedida, o lista cambiada, mientras se obtenía el audio
+  if (isStale() || state.tracks[index]?.id !== trackId) {
     return;
   }
   if (!ready) {
@@ -3568,9 +3630,7 @@ async function playTrack(index, options = {}) {
       waveformContainer.classList.remove('is-loading');
       waveformContainer.classList.remove('has-data');
     }
-    if (waveformMessage) {
-      waveformMessage.textContent = 'Audio no disponible. Vuelve a importarlo o sincronízalo con Dropbox.';
-    }
+    handlePlayFailure(index, auto, 'Audio no disponible. Vuelve a importarlo o sincronízalo con Dropbox.');
     return;
   }
 
@@ -3587,10 +3647,12 @@ async function playTrack(index, options = {}) {
         showDropboxError('No se pudo obtener el audio desde Dropbox.');
       }
     }
+    if (!isStale()) handlePlayFailure(index, auto);
     return;
   }
 
   await ensureContextRunning();
+  if (isStale()) return;
 
   const hasCurrent = state.currentIndex !== -1 && state.isPlaying;
   // Sin Web Audio no hay fundido real: ambos elementos sonarían a la vez
@@ -3643,11 +3705,21 @@ async function playTrack(index, options = {}) {
       }
     }
   }
+  if (isStale()) {
+    // Una petición posterior manda; si no ha tomado este reproductor, se calla
+    if (nextPlayer.trackId === track.id && players[activePlayerIndex] !== nextPlayer) {
+      nextPlayer.audio.pause();
+      nextPlayer.trackId = null;
+    }
+    return;
+  }
   if (playError) {
     nextPlayer.trackId = null;
     console.error('No se pudo reproducir la pista', playError);
+    handlePlayFailure(index, auto, 'No se pudo reproducir la pista.');
     return;
   }
+  consecutivePlayFailures = 0;
 
   if (waveformState.trackId === track.id && Number.isFinite(track.duration)) {
     waveformState.duration = track.duration;
@@ -3715,12 +3787,12 @@ async function playTrack(index, options = {}) {
     }
     
     if (state.autoLoop && state.tracks[index]) {
-      playTrack(index, { fade: false }).catch(console.error);
+      playTrack(index, { fade: false, auto: true }).catch(console.error);
       return;
     }
     const nextIndex = getNextIndex();
     if (nextIndex !== -1) {
-      playTrack(nextIndex, { fade: false }).catch(console.error);
+      playTrack(nextIndex, { fade: false, auto: true }).catch(console.error);
     } else {
       stopPlayback();
     }

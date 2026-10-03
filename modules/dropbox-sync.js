@@ -465,19 +465,28 @@ export function createDropboxSync({
     try { return await run; } finally { legacyPathPromises.delete(track.id); }
   }
 
-  async function ensureTrackUrl(track) {
+  // priority: la pista que se va a reproducir espera turno (hasta PRIORITY_WAIT_MS)
+  // en lugar de rendirse cuando la precarga ocupa las descargas disponibles.
+  const PRIORITY_WAIT_MS = 30000;
+  async function ensureTrackUrl(track, { priority = false } = {}) {
     if (!track) return false;
     if (!track.dropboxPath) {
       const restored = await maybeRestoreLegacyPath(track);
       if (!restored) return false;
     }
-    const now = Date.now();
     if (track.url && track.url.startsWith('blob:')) return true;
-    if (track._remoteRetryAt && now < track._remoteRetryAt) return false;
-    if (remoteLinkInFlight.has(track.id)) {
-      try { return await remoteLinkInFlight.get(track.id); } finally {}
+    const deadline = Date.now() + (priority ? PRIORITY_WAIT_MS : 0);
+    for (;;) {
+      if (remoteLinkInFlight.has(track.id)) {
+        try { return await remoteLinkInFlight.get(track.id); } finally {}
+      }
+      const now = Date.now();
+      const blockedUntil = Math.max(readAvailableAt, track._remoteRetryAt || 0);
+      const busy = now < blockedUntil || readInFlight >= DROPBOX_READ_CONCURRENCY;
+      if (!busy) break;
+      if (now >= deadline || blockedUntil > deadline) return false;
+      await new Promise(resolve => setTimeout(resolve, 250));
     }
-    if (now < readAvailableAt || readInFlight >= DROPBOX_READ_CONCURRENCY) return false;
     readInFlight += 1;
     const done = (result) => { readInFlight = Math.max(0, readInFlight - 1); return result; };
     const run = (async () => {
